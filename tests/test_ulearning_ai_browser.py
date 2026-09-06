@@ -5,9 +5,11 @@ import pytest
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_browser import (
     BrowserAiAccess,
+    _NoCourseAiAssistant,
     _decode_ai_frame,
     _decode_workbench_frame,
     _is_dgut_domain,
+    discover_cached_access,
     discover_browser_access,
 )
 
@@ -94,3 +96,29 @@ def test_discovery_builds_context_from_workbench_without_entering_conversation()
     assert access.context.assistant_id == "1234"
     assert access.context.course_id == "654321"
     assert access.referer == "https://aijx.dgut.edu.cn/ai/1234?auth=memory-only&courseId=654321&theme=blue"
+
+
+def test_cached_discovery_needs_no_browser_and_prefers_first_ai_course():
+    observed = []
+
+    def assistant(access):
+        observed.append((access.context.course_id, access.referer))
+        if access.context.course_id == "11":
+            raise _NoCourseAiAssistant("missing")
+        return "1234"
+
+    with patch("dgutbot.experimental.ulearning_ai_browser._assistant_from_workbench", side_effect=assistant):
+        access = discover_cached_access("memory-only", [11, 22, 22], user_agent="test-agent")
+    assert [item[0] for item in observed] == ["11", "22"]
+    assert "courseWeb=true" in observed[0][1]
+    assert access.context.assistant_id == "1234"
+    assert access.context.course_id == "22"
+    assert access.referer == "https://aijx.dgut.edu.cn/ai/1234?auth=memory-only&courseId=22&theme=ai"
+    assert "memory-only" not in repr(access)
+
+
+def test_cached_discovery_rejects_missing_login_or_courses():
+    with pytest.raises(UlearningAiError, match="login"):
+        discover_cached_access("", [1])
+    with pytest.raises(UlearningAiError, match="course"):
+        discover_cached_access("memory-only", [])

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dgutbot.experimental.ulearning_ai import AiModel, ChatChunk, ChatContext
+from dgutbot.experimental.ulearning_ai import AiModel, ChatChunk, ChatContext, UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge, flatten_messages
 
 
@@ -86,7 +86,8 @@ def test_gui_course_start_requires_ready_ai_when_auto_answer_is_enabled():
         monkeypatch.setattr(backend_commands.backend, "start_course_helper", lambda **_kwargs: setattr(start, "called", True))
         result = backend_commands.handle("start_course_helper", {})
     assert result["ok"] is False
-    assert "AI 工作台" in result["error"]
+    assert "登录缓存" in result["error"]
+    assert "AI" in result["error"]
     assert "private" not in repr(result)
     assert start.called is False
 
@@ -134,3 +135,42 @@ def test_backend_models_command_returns_dynamic_safe_fields():
         {"id": 1, "name": "通义千问", "vision": False, "online": False, "thinking": False},
         {"id": 4, "name": "通义千问VL", "vision": True, "online": False, "thinking": False},
     ], "selectedModelId": 4}
+
+
+def test_backend_ai_access_prefers_cached_login_without_browser():
+    from dgutbot.app import backend_commands
+
+    expected = object()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(backend_commands.backend, "token", "memory-only")
+        monkeypatch.setattr(backend_commands.backend, "courses", [SimpleNamespace(id=7)])
+        monkeypatch.setattr(backend_commands.backend, "selected_course", None)
+        monkeypatch.setattr(
+            backend_commands,
+            "discover_cached_access",
+            lambda token, courses, **_kwargs: expected if token == "memory-only" and courses == [7] else None,
+        )
+        monkeypatch.setattr(
+            backend_commands,
+            "discover_browser_access",
+            lambda _port: pytest.fail("browser discovery should not run"),
+        )
+        assert backend_commands._resolve_ai_access(9222) is expected
+
+
+def test_backend_ai_access_falls_back_to_browser_when_cache_is_unusable():
+    from dgutbot.app import backend_commands
+
+    expected = object()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(backend_commands.backend, "token", "stale")
+        monkeypatch.setattr(backend_commands.backend, "courses", [SimpleNamespace(id=7)])
+        monkeypatch.setattr(backend_commands.backend, "selected_course", None)
+        monkeypatch.setattr(
+            backend_commands,
+            "discover_cached_access",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(UlearningAiError("stale")),
+        )
+        monkeypatch.setattr(backend_commands.backend, "load_saved_courses", lambda: False)
+        monkeypatch.setattr(backend_commands, "discover_browser_access", lambda port: expected if port == 9333 else None)
+        assert backend_commands._resolve_ai_access(9333) is expected

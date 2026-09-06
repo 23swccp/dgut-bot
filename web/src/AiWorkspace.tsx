@@ -102,7 +102,7 @@ export function AiWorkspace() {
       {messages.length === 0 && <div className="ai-empty">
         <div className="ai-orb">✦</div>
         <h1>从课程上下文开始</h1>
-        <p>请先在优学院课程中打开 AI 工作台，无需点击“进入对话”。本页面会复用浏览器中的短期登录状态，不保存 Cookie 或授权信息。</p>
+        <p>只要程序中存在有效登录缓存，就能直接连接课程 AI，无需打开优学院。缓存失效时，请重新登录后让程序读取课程。</p>
         <div className="ai-suggestions">
           {["梳理这门课的重点", "解释一个课程概念", "制定本周复习计划"].map(text => <button key={text} type="button" onClick={() => { setInput(text); inputRef.current?.focus(); }}>{text}</button>)}
         </div>

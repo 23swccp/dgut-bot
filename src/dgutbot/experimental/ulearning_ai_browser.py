@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from urllib.request import ProxyHandler, build_opener
 
@@ -20,6 +20,10 @@ from .ulearning_ai import ChatContext, UlearningAiError, new_protocol_id
 
 AI_HOST = "aijx.dgut.edu.cn"
 WORKBENCH_MARKER = "course/workbench"
+
+
+class _NoCourseAiAssistant(UlearningAiError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -148,8 +152,48 @@ def _assistant_from_workbench(access: BrowserAiAccess) -> str:
 
     usable.sort(key=assistant_rank)
     if not usable:
-        raise UlearningAiError("No course AI assistant is available.")
+        raise _NoCourseAiAssistant("No course AI assistant is available.")
     return str(usable[0]["id"])
+
+
+def discover_cached_access(
+    authorization: str,
+    course_ids: Iterable[str | int],
+    *,
+    user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+) -> BrowserAiAccess:
+    """Build AI access directly from the app's memory-only LMS login state."""
+    token = str(authorization or "").strip()
+    normalized = [str(value).strip() for value in course_ids if value is not None]
+    candidates = tuple(dict.fromkeys(value for value in normalized if value))
+    if not token:
+        raise UlearningAiError("No cached LMS login is available.")
+    if not candidates:
+        raise UlearningAiError("No cached course is available for the AI service.")
+
+    for course_id in candidates:
+        workbench_query = urlencode({
+            "auth": token, "ocId": course_id, "theme": "ai", "courseWeb": "true",
+        })
+        workbench_referer = urlunsplit(("https", AI_HOST, "/ai/Workbench", workbench_query, ""))
+        pending = BrowserAiAccess(
+            context=ChatContext("pending", course_id, new_protocol_id()),
+            authorization=token,
+            referer=workbench_referer,
+            user_agent=str(user_agent or "Mozilla/5.0"),
+        )
+        try:
+            assistant_id = _assistant_from_workbench(pending)
+        except _NoCourseAiAssistant:
+            continue
+        direct_query = urlencode({"auth": token, "courseId": course_id, "theme": "ai"})
+        return BrowserAiAccess(
+            context=ChatContext(assistant_id, course_id, new_protocol_id()),
+            authorization=token,
+            referer=urlunsplit(("https", AI_HOST, f"/ai/{assistant_id}", direct_query, "")),
+            user_agent=pending.user_agent,
+        )
+    raise UlearningAiError("None of the cached courses has an available AI assistant.")
 
 
 def _targets(port: int) -> list[dict[str, Any]]:

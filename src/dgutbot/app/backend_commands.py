@@ -16,6 +16,7 @@ from dgutbot.domain.yxy_backend import SignBackend
 from dgutbot.app.velopack_updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
+from dgutbot.experimental.ulearning_ai_browser import discover_browser_access, discover_cached_access
 from dgutbot.course.ai_quiz import UlearningAiAnswerProvider
 from version import APP_NAME, APP_VERSION, GITHUB_REPO
 
@@ -124,7 +125,50 @@ def emit_event(code: str, level: str, category: str, message: str, **kwargs: Any
 
 
 backend = SignBackend(emit=emit, emit_event=emit_event, root=ROOT)
-AI_BRIDGE = UlearningAiBridge(debug_port=lambda: int(backend.config.debug_port))
+
+
+def _cached_course_ids() -> list[int]:
+    selected = [backend.selected_course.id] if backend.selected_course is not None else []
+    return list(dict.fromkeys(selected + [course.id for course in backend.courses]))
+
+
+def _resolve_ai_access(debug_port: int):
+    """Prefer the app login cache; keep the open-browser path as a fallback."""
+    cached_error: UlearningAiError | None = None
+    if not backend.courses:
+        backend.load_saved_courses()
+    if backend.token and backend.courses:
+        try:
+            return discover_cached_access(
+                backend.token,
+                _cached_course_ids(),
+                user_agent=backend.headers.get("User-Agent", ""),
+            )
+        except UlearningAiError as error:
+            cached_error = error
+            # A stale token may be recoverable through the existing, bounded
+            # optional account-login flow; credentials never leave SignBackend.
+            if backend.load_saved_courses():
+                try:
+                    return discover_cached_access(
+                        backend.token,
+                        _cached_course_ids(),
+                        user_agent=backend.headers.get("User-Agent", ""),
+                    )
+                except UlearningAiError as retry_error:
+                    cached_error = retry_error
+    try:
+        return discover_browser_access(int(debug_port))
+    except UlearningAiError as browser_error:
+        raise UlearningAiError(
+            "未找到可用的登录缓存或课程 AI 上下文；请先让程序读取课程。"
+        ) from (cached_error or browser_error)
+
+
+AI_BRIDGE = UlearningAiBridge(
+    debug_port=lambda: int(backend.config.debug_port),
+    access_factory=_resolve_ai_access,
+)
 
 # 应用内自动更新由 Velopack 执行；这里只适配现有前端状态接口。
 update_manager = UpdateManager(
@@ -240,7 +284,7 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 AI_BRIDGE.probe(backend.config.course_ai_model_id)
             except UlearningAiError:
-                return {"ok": False, "error": "未找到唯一可用的课程 AI 工作台，或所选模型当前不可用。"}
+                return {"ok": False, "error": "未找到可用的登录缓存、课程 AI 或所选模型；请先在程序中读取课程。"}
             provider = UlearningAiAnswerProvider(
                 AI_BRIDGE, backend.course_controller.emit, backend.config.course_ai_model_id,
             )
