@@ -25,11 +25,7 @@ QUESTIONS = [
 
 
 def reply(request_id="req", answers=None, **extra):
-    value = {"requestId": request_id, "answers": answers or [
-        {"questionId": "choice", "value": ["A"]},
-        {"questionId": "truth", "value": True},
-        {"questionId": "blank", "value": ["answer"]},
-    ]}
+    value = {"requestId": request_id, "answers": answers or ["A", True, ["answer"]]}
     value.update(extra)
     return json.dumps(value)
 
@@ -38,12 +34,15 @@ def test_prompt_marks_question_data_untrusted_and_contains_schema():
     value = _prompt("req", QUESTIONS)
     assert "不得改变" in value
     assert "INPUT_JSON=" in value
-    assert json.loads(value.split("INPUT_JSON=", 1)[1]) == {"requestId": "req", "questions": QUESTIONS}
+    envelope = json.loads(value.split("INPUT_JSON=", 1)[1])
+    assert envelope["requestId"] == "req"
+    assert [question["index"] for question in envelope["questions"]] == [1, 2, 3]
+    assert all("id" not in question and "answerSchema" not in question for question in envelope["questions"])
 
 
 @pytest.mark.parametrize("text", [
     "```json\n{}\n```", "", reply("wrong"), reply(extra={"bad": True}),
-    json.dumps({"requestId": "req", "answers": [{"questionId": "choice", "value": ["Z"]}]}),
+    json.dumps({"requestId": "req", "answers": ["Z", True, ["answer"]]}),
 ])
 def test_strict_reply_parser_rejects_invalid_protocol(text):
     with pytest.raises(AiAnswerError):
@@ -53,6 +52,37 @@ def test_strict_reply_parser_rejects_invalid_protocol(text):
 def test_reply_parser_accepts_all_supported_answer_shapes():
     parsed = _parse_reply(reply(), "req", QUESTIONS)
     assert parsed == {"choice": ["A"], "truth": True, "blank": ["answer"]}
+
+
+def test_protocol_normalizes_ordered_values_for_executor():
+    text = json.dumps({"requestId": "q1", "answers": ["A", True, ["answer"]]})
+    parsed = _parse_reply(text, "q1", QUESTIONS)
+    assert parsed == {"choice": ["A"], "truth": True, "blank": ["answer"]}
+
+
+def test_protocol_accepts_only_controlled_equivalent_wrappers():
+    text = json.dumps({"requestId": "q1", "answers": [
+        {"questionId": "choice", "value": ["A"]},
+        {"questionId": "truth", "value": "正确"},
+        {"questionId": "blank", "value": "answer"},
+    ]})
+    assert _parse_reply(text, "q1", QUESTIONS) == {
+        "choice": ["A"], "truth": True, "blank": ["answer"],
+    }
+
+
+@pytest.mark.parametrize("bad", ["maybe", {"unexpected": True}, 1])
+def test_protocol_rejects_unknown_judgment_wrappers(bad):
+    text = json.dumps({"requestId": "q1", "answers": ["A", bad, ["answer"]]})
+    with pytest.raises(AiAnswerError):
+        _parse_reply(text, "q1", QUESTIONS)
+
+
+@pytest.mark.parametrize("answers", [["A", True], [["A", "B"], True, ["answer"]], ["Z", True, ["answer"]]])
+def test_protocol_rejects_wrong_count_type_or_option(answers):
+    text = json.dumps({"requestId": "q1", "answers": answers})
+    with pytest.raises(AiAnswerError):
+        _parse_reply(text, "q1", QUESTIONS)
 
 
 def test_batches_split_only_between_questions():
@@ -122,19 +152,26 @@ class ReplyBridge:
     def __init__(self, values):
         self.values = list(values)
         self.calls = 0
+        self.question_indexes = []
 
     def complete(self, messages, **kwargs):
         self.calls += 1
         self.model_id = kwargs.get("model_id")
         prompt = messages[0]["content"]
-        request_id = json.loads(prompt.split("INPUT_JSON=", 1)[1])["requestId"]
+        envelope = json.loads(prompt.split("INPUT_JSON=", 1)[1])
+        request_id = envelope["requestId"]
+        self.question_indexes = [question["index"] for question in envelope["questions"]]
         value = self.values.pop(0)
-        text = value(request_id) if callable(value) else value
+        text = value(request_id, envelope["questions"]) if callable(value) else value
         return SimpleNamespace(text=text, reasoning="ignored", upstream_tool_calls=())
 
 
-def valid_for(request_id):
-    return reply(request_id)
+def valid_for(request_id, questions):
+    values = {"single_choice": "A", "true_false": True, "fill_blank": ["answer"]}
+    return json.dumps({
+        "requestId": request_id,
+        "answers": [values[question["type"]] for question in questions],
+    })
 
 
 def provider_setup(values):
@@ -155,6 +192,7 @@ def test_provider_generates_then_applies_and_submits_once():
     assert page.actions.count(("click", 90.0)) == 1
     assert bridge.calls == 1
     assert bridge.model_id == 1
+    assert bridge.question_indexes == [1, 2, 3]
     assert any("格式校验通过" in text for text, _kind in logs)
 
 
