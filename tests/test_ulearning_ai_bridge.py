@@ -51,6 +51,39 @@ def test_bridge_collects_text_reasoning_and_upstream_calls():
     assert reply.upstream_tool_calls == ({"id": "call-1"},)
 
 
+def test_bridge_keeps_upstream_operations_serial_and_five_seconds_apart():
+    now = [100.0]
+    sleeps = []
+    access = SimpleNamespace(
+        context=ChatContext("1", "2", "3"),
+        create_session=lambda: object(),
+    )
+
+    class FakeClient:
+        def __init__(self, _session):
+            pass
+
+        def list_models(self):
+            return (AiModel(1, "Qwen"),)
+
+        def stream_chat(self, _context, **_kwargs):
+            yield ChatChunk(text="ok")
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    bridge = UlearningAiBridge(
+        access_factory=lambda _port: access,
+        client_factory=FakeClient,
+        monotonic=lambda: now[0],
+        sleep=sleep,
+    )
+    bridge.complete([{"role": "user", "content": "one"}])
+    bridge.complete([{"role": "user", "content": "two"}])
+    assert sleeps == [5.0]
+
+
 def test_bridge_probe_only_discovers_browser_access():
     calls = []
     access = SimpleNamespace(create_session=lambda: object())
@@ -101,13 +134,32 @@ def test_gui_course_start_injects_ai_provider_after_probe():
         monkeypatch.setattr(backend_commands.backend.config, "course_quiz_auto_answer", True)
         monkeypatch.setattr(backend_commands.AI_BRIDGE, "probe", lambda *_args: observed.append("probe"))
         monkeypatch.setattr(backend_commands.backend, "_course_controller", controller)
+        monkeypatch.setattr(backend_commands.backend, "save_config", lambda: observed.append("disarmed"))
         monkeypatch.setattr(backend_commands.backend, "start_course_helper", lambda **kwargs: observed.append(kwargs) or True)
         result = backend_commands.handle("start_course_helper", {})
-    assert result == {"ok": True}
+    assert result == {"ok": True, "quizAutoAnswerArmed": False}
     assert observed[0] == "probe"
     assert observed[1]["quiz_mode"] == "ai"
     assert observed[1]["ai_provider"].bridge is backend_commands.AI_BRIDGE
     assert observed[1]["ai_provider"].model_id == backend_commands.backend.config.course_ai_model_id
+    assert observed[2] == "disarmed"
+    assert backend_commands.backend.config.course_quiz_auto_answer is False
+
+
+def test_failed_gui_course_start_keeps_one_shot_auto_answer_armed():
+    from dgutbot.app import backend_commands
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(backend_commands.backend.config, "course_quiz_auto_answer", True)
+        monkeypatch.setattr(backend_commands.AI_BRIDGE, "probe", lambda *_args: None)
+        monkeypatch.setattr(backend_commands.backend, "start_course_helper", lambda **_kwargs: False)
+        monkeypatch.setattr(
+            backend_commands.backend,
+            "save_config",
+            lambda: pytest.fail("failed starts must not consume the one-shot setting"),
+        )
+        result = backend_commands.handle("start_course_helper", {})
+    assert result == {"ok": False, "quizAutoAnswerArmed": True}
 
 
 def test_gui_course_start_skips_ai_probe_when_auto_answer_is_disabled():

@@ -47,6 +47,21 @@ class BackendTests(unittest.TestCase):
         config = AppConfig.from_mapping({"poll_interval": 8, "unexpected": "ignored"}, Path("."))
         self.assertEqual(config.poll_interval, 8)
         self.assertFalse(hasattr(config, "unexpected"))
+        self.assertFalse(config.course_quiz_auto_answer)
+
+    def test_quiz_auto_answer_is_session_only_and_starts_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.json").write_text(
+                json.dumps({"course_quiz_auto_answer": True}), encoding="utf-8",
+            )
+            backend = self.make_backend(root)
+            self.assertFalse(backend.config.course_quiz_auto_answer)
+
+            backend.update_settings(course_quiz_auto_answer=True)
+            self.assertTrue(backend.config.course_quiz_auto_answer)
+            saved = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            self.assertFalse(saved["course_quiz_auto_answer"])
 
     def test_config_normalizes_invalid_values_without_user_interaction(self):
         config = AppConfig.from_mapping(

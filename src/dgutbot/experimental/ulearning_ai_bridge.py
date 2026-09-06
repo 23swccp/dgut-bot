@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -13,6 +14,7 @@ from .ulearning_ai_browser import BrowserAiAccess, discover_browser_access
 MAX_MESSAGES = 64
 MAX_PROMPT_CHARS = 32_768
 ALLOWED_ROLES = {"system", "user", "assistant"}
+DEFAULT_OPERATION_INTERVAL_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -56,18 +58,40 @@ class UlearningAiBridge:
         debug_port: int | Callable[[], int] = 9222,
         access_factory: Callable[..., BrowserAiAccess] = discover_browser_access,
         client_factory: Callable[..., UlearningAiClient] = UlearningAiClient,
+        operation_interval: float = DEFAULT_OPERATION_INTERVAL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._debug_port = debug_port
         self._access_factory = access_factory
         self._client_factory = client_factory
         self._lock = threading.Lock()
+        self._operation_interval = max(0.0, float(operation_interval))
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._last_operation_finished_at: float | None = None
+
+    def _wait_for_operation_slot(self) -> None:
+        """Keep logical upstream operations serial and conservatively paced."""
+        if self._last_operation_finished_at is None:
+            return
+        remaining = self._operation_interval - (self._monotonic() - self._last_operation_finished_at)
+        if remaining > 0:
+            self._sleep(remaining)
+
+    def _finish_operation(self) -> None:
+        self._last_operation_finished_at = self._monotonic()
 
     def models(self) -> tuple[AiModel, ...]:
         """Return the currently enabled upstream models without exposing access data."""
         with self._lock:
-            debug_port = self._debug_port() if callable(self._debug_port) else self._debug_port
-            access = self._access_factory(int(debug_port))
-            return self._client_factory(access.create_session()).list_models()
+            self._wait_for_operation_slot()
+            try:
+                debug_port = self._debug_port() if callable(self._debug_port) else self._debug_port
+                access = self._access_factory(int(debug_port))
+                return self._client_factory(access.create_session()).list_models()
+            finally:
+                self._finish_operation()
 
     def probe(self, model_id: int | None = None) -> None:
         """Verify that a workbench and the selected model are usable."""
@@ -78,18 +102,22 @@ class UlearningAiBridge:
     def complete(self, messages: list[dict[str, Any]], *, model_id: int = 1) -> BridgeReply:
         prompt = flatten_messages(messages)
         with self._lock:
-            debug_port = self._debug_port() if callable(self._debug_port) else self._debug_port
-            access = self._access_factory(int(debug_port))
-            client = self._client_factory(access.create_session())
-            models = client.list_models()
-            if int(model_id) not in {model.id for model in models}:
-                raise UlearningAiError("The selected AI model is unavailable.")
-            chunks = list(client.stream_chat(
-                access.context,
-                request_id=new_protocol_id(),
-                query=prompt,
-                model_id=int(model_id),
-            ))
+            self._wait_for_operation_slot()
+            try:
+                debug_port = self._debug_port() if callable(self._debug_port) else self._debug_port
+                access = self._access_factory(int(debug_port))
+                client = self._client_factory(access.create_session())
+                models = client.list_models()
+                if int(model_id) not in {model.id for model in models}:
+                    raise UlearningAiError("The selected AI model is unavailable.")
+                chunks = list(client.stream_chat(
+                    access.context,
+                    request_id=new_protocol_id(),
+                    query=prompt,
+                    model_id=int(model_id),
+                ))
+            finally:
+                self._finish_operation()
         text = "".join(chunk.text for chunk in chunks)
         reasoning = "".join(chunk.reasoning for chunk in chunks)
         tool_calls = tuple(call for chunk in chunks for call in chunk.tool_calls)

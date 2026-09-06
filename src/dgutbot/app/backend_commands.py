@@ -288,7 +288,12 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             provider = UlearningAiAnswerProvider(
                 AI_BRIDGE, backend.course_controller.emit, backend.config.course_ai_model_id,
             )
-            return {"ok": backend.start_course_helper(quiz_mode="ai", ai_provider=provider)}
+            started = backend.start_course_helper(quiz_mode="ai", ai_provider=provider)
+            if started:
+                # CourseConfig 已为本次任务生成快照；解除全局开关，下一次启动必须重新明确开启。
+                backend.config.course_quiz_auto_answer = False
+                backend.save_config()
+            return {"ok": started, "quizAutoAnswerArmed": backend.config.course_quiz_auto_answer}
         return {"ok": backend.start_course_helper()}
     if command == "stop_course_helper":
         backend.stop_course_helper()

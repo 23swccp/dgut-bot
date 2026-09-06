@@ -208,6 +208,15 @@ class InjectScriptTests(unittest.TestCase):
         worker.assert_not_called()
         self.assertFalse(controller._quiz_busy)
 
+    def test_busy_quiz_worker_does_not_launch_a_second_page_handler(self):
+        controller = CourseController(lambda *_: None)
+        controller._active_config = CourseConfig(quiz_auto_answer=True, quiz_mode="ai")
+        controller._quiz_busy = True
+        with patch('yxy_course.threading.Thread') as worker:
+            controller._on_quiz_appeared({'unfinished': 3})
+        worker.assert_not_called()
+        self.assertTrue(controller._quiz_busy)
+
     def test_queued_quiz_worker_rechecks_answering_setting(self):
         controller = CourseController(lambda *_: None)
         controller._active_config = CourseConfig(quiz_auto_answer=False)

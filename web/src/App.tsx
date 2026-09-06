@@ -54,7 +54,7 @@ function App() {
   const [playbackRate, setPlaybackRate] = useState(8);
   const [autoDismiss, setAutoDismiss] = useState(true);
   const [documentScroll, setDocumentScroll] = useState(true);
-  const [quizAutoAnswer, setQuizAutoAnswer] = useState(true);
+  const [quizAutoAnswer, setQuizAutoAnswer] = useState(false);
   const [quizChoiceEnabled, setQuizChoiceEnabled] = useState(true);
   const [quizJudgmentEnabled, setQuizJudgmentEnabled] = useState(true);
   const [quizBlankEnabled, setQuizBlankEnabled] = useState(true);
@@ -377,7 +377,13 @@ function App() {
         course_quiz_blank_enabled: quizBlankEnabled,
       });
       const result = await call("start_course_helper"); setBusy(false);
-      if (result.ok) { setHelperRunning(true); appendLearning("刷课已启动。"); }
+      if (result.ok) {
+        setHelperRunning(true);
+        if (quizAutoAnswer) {
+          setQuizAutoAnswer(false);
+          appendLearning("刷课已启动；本次已启用自动答题，下次启动需重新开启。");
+        } else appendLearning("刷课已启动。");
+      }
       else appendLearning(result.error || "未找到已打开的课件学习页，请先输入 open。");
       return;
     }

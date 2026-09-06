@@ -50,7 +50,7 @@ class AppConfig:
     course_document_scroll_enabled: bool = True
     course_document_scroll_interval: float = 3.0
     course_document_scroll_speed: float = 3.0
-    course_quiz_auto_answer: bool = True
+    course_quiz_auto_answer: bool = False
     course_quiz_choice_enabled: bool = True
     course_quiz_judgment_enabled: bool = True
     course_quiz_blank_enabled: bool = True
@@ -220,6 +220,8 @@ class SignBackend:
         self.root = root or Path(__file__).resolve().parents[3]
         self.config_path = self.root / "config.json"
         self.config: AppConfig = self._load_config()
+        # 自动答题是一次性运行授权，不能从上一次程序会话继承。
+        self.config.course_quiz_auto_answer = False
         credentials = self._load_credentials()
         self.token = credentials.get("token") or TOKEN
         cached_user_id = credentials.get("user_id")
@@ -307,7 +309,10 @@ class SignBackend:
         return True
 
     def save_config(self) -> None:
-        self._write_json_atomic(self.config_path, self.config.to_mapping())
+        values = self.config.to_mapping()
+        # 允许当前进程临时开启，但磁盘上的下一次启动状态始终关闭。
+        values["course_quiz_auto_answer"] = False
+        self._write_json_atomic(self.config_path, values)
 
     def update_settings(self, **values) -> None:
         if "browser_path" in values:
