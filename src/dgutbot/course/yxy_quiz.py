@@ -699,9 +699,27 @@ class QuizExecutor:
         if target is None:
             raise AgentError("QUIZ_SUBMIT_FAILED", "The submit button is unavailable.")
         state = before_submit()
-        target = next((q.submit for q in state.questions if q.qid in answers and q.submit), None)
+        # The caret may asynchronously scroll the last blank back into view even
+        # after SCROLL_SUBMIT_JS ran. Require two consecutive, matching submit
+        # coordinates before spending the single trusted click attempt.
+        target = None
+        previous_point = None
+        for attempt in range(4):
+            if h._evaluate(SCROLL_SUBMIT_JS) != "ok":
+                raise AgentError("QUIZ_SUBMIT_FAILED", "The submit target changed before execution.")
+            h._sleep(0.1 * (attempt + 1))
+            state = guard()
+            candidate = next((q.submit for q in state.questions if q.qid in answers and q.submit), None)
+            if candidate is None or candidate.get("pointMatches") is False or candidate.get("enabled") is False:
+                previous_point = None
+                continue
+            point = (round(float(candidate["x"]), 1), round(float(candidate["y"]), 1))
+            if previous_point is not None and all(abs(a - b) <= 1 for a, b in zip(point, previous_point)):
+                target = candidate
+                break
+            previous_point = point
         if target is None:
-            raise AgentError("QUIZ_SUBMIT_FAILED", "The submit target changed before execution.")
+            raise AgentError("QUIZ_SUBMIT_FAILED", "The submit target did not become stable before execution.")
         if not h._click_in_viewport(target, state.viewport):
             raise AgentError("QUIZ_SUBMIT_FAILED", "The single submit attempt failed.")
         for _ in range(50):

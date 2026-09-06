@@ -7,6 +7,7 @@ import {
 import { stateLabel, toastFor, type UpdateStatus } from "./updateClient";
 import { UpdateBell, UpdateDrawer, UpdateFailureDialog, UpdateToast, useScrollRestore } from "./UpdateDrawer";
 import { AboutGuide } from "./AboutGuide";
+import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import "./updateDrawer.css";
 
 type Page = "terminal" | "learning" | "settings" | "about";
@@ -22,7 +23,8 @@ type AppConfig = {
   course_ai_model_id?: number;
 };
 type AppInfo = { appName: string; version: string; repo: string };
-type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; info?: AppInfo; update?: UpdateStatus };
+type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string };
+type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const icon: Record<Page, string> = { terminal: "✓", learning: "▶", settings: "⚙", about: "i" };
@@ -36,7 +38,9 @@ function App() {
   const [courseCursor, setCourseCursor] = useState(0);
   const [learningCommand, setLearningCommand] = useState("");
   const [busy, setBusy] = useState(false);
-  const [logs, setLogs] = useState<string[]>(["优学院助手", "────────────────────────────────────────────────────", "正在连接本地后端…"]);
+  const [signEvents, setSignEvents] = useState<SignEvent[]>(() => [{ id: "initial", time: new Date().toISOString(), message: "正在连接本地后端…", level: "info" }]);
+  const [signStatus, setSignStatus] = useState<SignMonitorStatus>({ running: false, state: "idle", courseName: "", intervalSeconds: 5, round: 0, startedAt: "", lastCheck: "", lastResult: "等待启动" });
+  const [selectedSignCourse, setSelectedSignCourse] = useState<Course | null>(null);
   const [learningLogs, setLearningLogs] = useState<string[]>(["按 Enter 启动；open 打开课件；speed 8 设置倍速；stop 停止。"]);
   const [courseEvents, setCourseEvents] = useState<CourseEvent[]>([]);
   const [courseStatus, setCourseStatus] = useState<CourseStatus>({ running: false, connected: false, controllerState: "IDLE" });
@@ -67,7 +71,7 @@ function App() {
   const autoOpenedUpdateRef = useRef("");
   const signInitializationStartedRef = useRef(false);
   const drawerScroll = useScrollRestore(drawerOpen);
-  const endRef = useRef<HTMLPreElement>(null);
+  const signLogRef = useRef<HTMLDivElement>(null);
   const commandRef = useRef<HTMLInputElement>(null);
   const learningEndRef = useRef<HTMLPreElement>(null);
   const learningLogRef = useRef<HTMLDivElement>(null);
@@ -75,13 +79,18 @@ function App() {
   const learningAutoScrollRef = useRef(true);
   const learningCommandRef = useRef<HTMLInputElement>(null);
   const coursePickerRef = useRef<HTMLDivElement>(null);
-  const append = (line: string) => setLogs(items => [...items, line].slice(-500));
+  const append = (line: string, level: CourseEvent["level"] = "info") => setSignEvents(items => addSignEvent(items, {
+    id: `local-${Date.now()}-${Math.random()}`,
+    time: new Date().toISOString(),
+    message: line,
+    level,
+  }));
   const appendLearning = (line: string) => setLearningLogs(items => [...items, `[${formatClock(new Date().toISOString())}] ${line}`].slice(-80));
   const courseChoices = [...new Map<number, Course>(courses.map(course => [course.id, course])).values()];
   const courseQuery = command.trim().toLocaleLowerCase();
   const matchingCourses = courseChoices.filter(course => !courseQuery || `${course.name} ${course.teacherName} ${course.id}`.toLocaleLowerCase().includes(courseQuery));
 
-  useEffect(() => { const terminal = endRef.current?.parentElement; terminal?.scrollTo({ top: terminal.scrollHeight, behavior: "smooth" }); }, [logs]);
+  useEffect(() => { const log = signLogRef.current; log?.scrollTo({ top: log.scrollHeight, behavior: "smooth" }); }, [signEvents]);
   useEffect(() => {
     const target = learningLogRef.current;
     if (target && learningAutoScrollRef.current) target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
@@ -138,13 +147,33 @@ function App() {
         const learning = events.filter(event => event.sessionId.startsWith("course-") || event.category !== "general");
         const general = events.filter(event => event.category === "general");
         if (learning.length) setCourseEvents(items => mergeEvents(items, learning));
-        general.forEach(event => append(`[${formatClock(event.time)}] ${event.message}`));
+        general.forEach(event => setSignEvents(items => addSignEvent(items, {
+          id: `backend-${event.seq}`,
+          time: event.time,
+          message: event.message,
+          level: event.level,
+        })));
         courseLastSeqRef.current = Math.max(courseLastSeqRef.current, result.latestSeq || 0);
       } }
       catch { /* 本地服务启动和关闭阶段安静忽略。 */ }
     };
     void pullEvents();
     const timer = window.setInterval(() => void pullEvents(), 750);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    const pullSignStatus = async () => {
+      const result = await call("get_sign_monitor_status");
+      if (!disposed && result.ok && result.signStatus) {
+        setSignStatus(result.signStatus);
+        setPhase(current => result.signStatus?.running
+          ? (current === "login" || current === "courses" ? current : "monitoring")
+          : current === "monitoring" ? "selected" : current);
+      }
+    };
+    void pullSignStatus();
+    const timer = window.setInterval(() => void pullSignStatus(), 1000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, []);
   useEffect(() => {
@@ -325,7 +354,7 @@ function App() {
     if (busy) return;
     setBusy(true); const result = await call("select_course", { query: String(course.id) }); setBusy(false);
     if (result.ok && result.course) {
-      setCommand(""); setPhase("selected"); append(`已选定：${result.course.name} · ${result.course.teacherName}`);
+      setSelectedSignCourse(result.course); setCommand(""); setPhase("selected"); append(`已选定：${result.course.name} · ${result.course.teacherName}`);
     } else append("选择课程失败，请重新选择。");
   }
   async function initializeSignIn() {
@@ -400,7 +429,7 @@ function App() {
       return;
     }
     setCommand(""); setBusy(true);
-    if (input.toLowerCase() === "clear") { setLogs([]); setBusy(false); return; }
+    if (input.toLowerCase() === "clear") { setSignEvents([]); setBusy(false); return; }
     if (input) append(`> ${input}`);
     if (input.toLowerCase() === "kill") {
       const result = await call("shutdown_app"); if (result.ok) append("正在关闭本地服务与前端进程…"); else append(`退出失败：${result.error || "未知错误"}`);
@@ -417,7 +446,7 @@ function App() {
         append(opened.ok ? "请在浏览器中完成登录，程序将自动继续。" : `启动浏览器失败：${opened.error || "未知错误"}`);
       }
     } else if (phase === "selected") {
-      if (input === "/") { await call("clear_selected_course"); setPhase("courses"); append("已取消选定。 "); }
+      if (input === "/") { await call("clear_selected_course"); setSelectedSignCourse(null); setPhase("courses"); append("已取消选定。"); }
       else if (!input) { const result = await call("start_monitor"); if (result.ok) setPhase("monitoring"); }
     } else if (phase === "monitoring") {
       if (input === "/" || input.toLowerCase() === "stop") { await call("stop_monitor"); setPhase("selected"); append("已停止轮询。 "); } else append("正在轮询。输入 / 或 stop 可以停止。 ");
@@ -439,6 +468,12 @@ function App() {
   }
   const navItems: Page[] = ["terminal", "learning", "settings", "about"];
   const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", settings: "设置", about: "关于" };
+  const displayedSignEvents = signEvents.map(signEventView);
+  const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
+  const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
+  const nextCheckSeconds = signStatus.running && lastCheckMs
+    ? Math.max(0, signStatus.intervalSeconds - Math.floor((Date.now() - lastCheckMs) / 1000))
+    : 0;
   const displayedCourseEvents = visibleCourseEvents(courseEvents, true);
   const pagePosition = courseStatus.page?.total ? `${courseStatus.page.index || 0}/${courseStatus.page.total}` : "--/--";
   const videoProgress = `${formatDuration(courseStatus.video?.currentTime)}/${formatDuration(courseStatus.video?.duration)}`;
@@ -485,7 +520,33 @@ function App() {
       </AnimatePresence>
       <div className="workspace-content">
       {showHeaderUpdate && <UpdateBell status={updateStatus} open={drawerOpen} onToggle={toggleDrawer} />}
-      {page === "terminal" && <section className={`terminal ${phase === "courses" ? "course-picking" : ""}`}><pre ref={endRef}>{logs.join("\n")}</pre><div className="command"><b>›</b><input ref={commandRef} aria-label="课程签到命令" autoFocus disabled={busy || phase === "login"} value={command} onChange={event => setCommand(event.target.value)} onKeyDown={handleSignKeyDown} placeholder={busy ? "正在自动读取登录缓存…" : phase === "login" ? "等待浏览器登录，完成后自动继续…" : phase === "courses" ? "搜索课程，↑↓ 选择，Enter 确认…" : phase === "selected" ? "按 Enter 开始监测，输入 / 重新选课…" : phase === "monitoring" ? "正在监测；输入 / 停止…" : "正在准备签到模块…"}/></div>{phase === "courses" && <motion.div className="course-quick-pick" ref={coursePickerRef} initial={reduceMotion ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}><div className="course-picker-head"><strong>选择签到课程</strong><span>{matchingCourses.length} / {courseChoices.length} 门</span></div><div className="course-options" role="listbox" aria-label="课程列表">{matchingCourses.length ? matchingCourses.map((course, index) => <button key={course.id} type="button" role="option" aria-selected={index === courseCursor} className={`course-option ${index === courseCursor ? "active" : ""}`} onMouseEnter={() => setCourseCursor(index)} onClick={() => void chooseSignCourse(course)}><span><strong>{course.name}</strong><small>{course.teacherName || "未知教师"}</small></span><code>ID {course.id}</code></button>) : <div className="course-empty">没有匹配课程，请换个关键词。</div>}</div><div className="course-picker-help">↑↓ 移动　Enter 选择　Esc 清空搜索</div></motion.div>}</section>}
+      {page === "terminal" && <section className={`terminal sign-terminal ${phase === "courses" ? "course-picking" : ""}`}>
+        <div className="sign-event-log" ref={signLogRef} aria-label="签到关键事件">
+          <div className="sign-day-label">今天</div>
+          {displayedSignEvents.length === 0 && <div className="event-empty">暂无关键事件</div>}
+          {displayedSignEvents.map(event => <article className={`sign-event ${event.tone}`} key={event.id}>
+            <time>{formatClock(event.time)}</time><span className="sign-event-mark" aria-hidden="true">{event.symbol}</span>
+            <div><strong>{event.title}</strong>{event.detail && <small>{event.detail}</small>}</div>
+          </article>)}
+          {signStatus.running && <article className="sign-event live" aria-label="持续监测中">
+            <time>{formatClock(signStatus.lastCheck)}</time><span className="sign-event-mark" aria-hidden="true"><i /></span>
+            <div><strong>{signStatus.round ? `持续监测中 · 第 ${signStatus.round} 轮已完成` : "正在进行首次检查"}</strong><small>{signStatus.round ? `${signStatus.lastResult} · ${nextCheckSeconds} 秒后再次检查` : "正在读取课堂和签到活动"}</small></div>
+          </article>}
+        </div>
+        <div className="command"><b>›</b><input ref={commandRef} aria-label="课程签到命令" autoFocus disabled={busy || phase === "login"} value={command} onChange={event => setCommand(event.target.value)} onKeyDown={handleSignKeyDown} placeholder={busy ? "正在自动读取登录缓存…" : phase === "login" ? "等待浏览器登录，完成后自动继续…" : phase === "courses" ? "搜索课程，↑↓ 选择，Enter 确认…" : phase === "selected" ? "按 Enter 开始监测，输入 / 重新选课…" : phase === "monitoring" ? "正在监测；输入 / 停止…" : "正在准备签到模块…"}/></div>
+        {phase === "courses" && <motion.div className="course-quick-pick" ref={coursePickerRef} initial={reduceMotion ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}><div className="course-picker-head"><strong>选择签到课程</strong><span>{matchingCourses.length} / {courseChoices.length} 门</span></div><div className="course-options" role="listbox" aria-label="课程列表">{matchingCourses.length ? matchingCourses.map((course, index) => <button key={course.id} type="button" role="option" aria-selected={index === courseCursor} className={`course-option ${index === courseCursor ? "active" : ""}`} onMouseEnter={() => setCourseCursor(index)} onClick={() => void chooseSignCourse(course)}><span><strong>{course.name}</strong><small>{course.teacherName || "未知教师"}</small></span><code>ID {course.id}</code></button>) : <div className="course-empty">没有匹配课程，请换个关键词。</div>}</div><div className="course-picker-help">↑↓ 移动　Enter 选择　Esc 清空搜索</div></motion.div>}
+        <div className="sign-overview" aria-label="签到监测状态">
+          <div className="sign-overview-main">
+            <span className={`sign-radar ${signStatus.running ? "active" : ""}`} aria-hidden="true">◎</span>
+            <div><div className="sign-course-line"><strong>{signCourseName}</strong><span className={`sign-state ${signStatus.running ? "running" : ""}`}><i />{signStatus.running ? "监测中" : phase === "selected" ? "等待启动" : phase === "courses" ? "等待选择" : "未运行"}</span></div><p>{signStatus.running ? signStatus.lastResult : phase === "selected" ? "按 Enter 开始监测" : "选择课程后即可开始监测签到"}</p></div>
+          </div>
+          <div className="sign-stats">
+            <StatusItem label="最近检查" value={formatClock(signStatus.lastCheck)} />
+            <StatusItem label="下次检查" value={signStatus.running ? `${nextCheckSeconds} 秒` : "--"} />
+            <StatusItem label="已检查" value={`${signStatus.round} 次`} />
+          </div>
+        </div>
+      </section>}
       {page === "learning" && <section className="terminal learning-terminal">
         <div className="course-status" aria-label="刷课实时状态">
           <div className="course-status-head"><strong className={`run-state ${courseStatus.resourceError || courseStatus.stalled || courseStatus.paused ? "warning" : helperRunning ? "success" : ""}`}>{runStateLabel(courseStatus)}</strong><span className={courseStatus.connected ? "connected" : "disconnected"}>{connectionLabel(courseStatus)}</span><span className="course-name">{courseStatus.courseName || "未识别课程"}</span></div>

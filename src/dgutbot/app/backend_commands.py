@@ -279,6 +279,8 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "stop_monitor":
         backend.stop_monitor()
         return {"ok": True}
+    if command == "get_sign_monitor_status":
+        return {"ok": True, "signStatus": backend.sign_monitor_status()}
     if command == "start_course_helper":
         if backend.config.course_quiz_auto_answer:
             try:

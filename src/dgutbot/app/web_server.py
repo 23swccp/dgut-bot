@@ -92,6 +92,10 @@ def stop_backend_tasks() -> None:
         backend.stop_monitor()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        backend.api.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class LocalApiHandler(BaseHTTPRequestHandler):

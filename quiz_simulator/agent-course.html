@@ -45,13 +45,16 @@
   };
   window.labSnapshot = () => ({...stats, pageId, pageIndex, recordComplete,
     finished: [...document.querySelectorAll('.question-wrapper.finished')].map(q => q.id),
+    lockedInputs: document.querySelectorAll('.blank-input:disabled').length,
+    answerResults: document.querySelectorAll('.input-wrapper .result').length,
+    wrongResults: document.querySelectorAll('.input-wrapper .result.wrong').length,
     status: document.querySelector('#server-status')?.textContent || ''});
   window.labChangePage = () => { pageId += '-changed'; document.querySelector('#page-label').textContent = pageId; };
   window.labCover = () => { const c = element('div', '', '测试遮挡层'); c.id = 'cover'; document.body.append(c); };
   function values() {
     return Object.fromEntries([...document.querySelectorAll('.question-wrapper')].map(q => {
       let value;
-      if (q.dataset.kind === 'single_choice') value = [...q.querySelectorAll('.checkbox.selected')].map(n => n.parentElement.dataset.option);
+      if (q.dataset.kind === 'single_choice' || q.dataset.kind === 'multiple_choice') value = [...q.querySelectorAll('.checkbox.selected')].map(n => n.parentElement.dataset.option);
       else if (q.dataset.kind === 'true_false') value = q.querySelector('.choice-btn.selected')?.classList.contains('right-btn') ?? null;
       else value = [...q.querySelectorAll('input')].map(n => n.value);
       return [q.id, value];
@@ -70,14 +73,18 @@
       return;
     }
     for (const question of page.questions) {
-      const q = element('section', 'question-wrapper'); q.id = question.id; q.dataset.kind = question.type;
+      const q = element('section', 'question-wrapper' + (config.prefilled ? ' show-answer wrong' : '')); q.id = question.id; q.dataset.kind = question.type;
       q.append(element('span', 'question-type-tag', question.sourceType));
       const title = element('div', 'question-title-html', question.prompt); q.append(title);
-      if (question.type === 'single_choice') {
+      if (question.type === 'single_choice' || question.type === 'multiple_choice') {
         for (const option of question.options) {
           const a = element('a', 'choice-item'); a.dataset.option = option.id;
-          a.append(element('span', 'checkbox radio'), element('span', 'option', option.id + '.'), element('span', 'content-wrapper', option.text));
-          a.onclick = e => { if (!e.isTrusted) return; q.querySelectorAll('.checkbox').forEach(n => n.classList.remove('selected')); a.firstChild.classList.add('selected'); };
+          a.append(element('span', 'checkbox' + (question.type === 'single_choice' ? ' radio' : '')), element('span', 'option', option.id + '.'), element('span', 'content-wrapper', option.text));
+          a.onclick = e => {
+            if (!e.isTrusted) return;
+            if (question.type === 'single_choice') q.querySelectorAll('.checkbox').forEach(n => n.classList.remove('selected'));
+            a.firstChild.classList.toggle('selected', question.type === 'multiple_choice' ? !a.firstChild.classList.contains('selected') : true);
+          };
           q.append(a);
         }
       } else if (question.type === 'true_false') {
@@ -89,10 +96,11 @@
         }
         q.append(group);
       } else {
-        for (let i = 0; i < 2; i++) {
-          const holder = element('span', 'answer-width'), input = document.createElement('input');
+        for (let i = 0; i < (question.blankCount || 2); i++) {
+          const holder = element('span', 'answer-width input-wrapper'), input = document.createElement('input');
+          input.className = 'blank-input'; input.type = 'text';
           input.setAttribute('aria-label', `填空 ${i + 1}`);
-          if (config.prefilled && i === 0) input.value = '已有用户答案';
+          if (config.prefilled) input.value = `已有用户答案 ${i + 1}`;
           holder.append(input); title.append(holder);
         }
       }
@@ -112,7 +120,16 @@
         const result = await response.json();
         if (!result.accepted) throw new Error('答案校验失败');
         stats.accepted++; recordComplete = true;
-        view.querySelectorAll('.question-wrapper').forEach(q => q.classList.add('finished'));
+        view.querySelectorAll('.question-wrapper').forEach(q => {
+          const grade = result.correct ? 'right' : 'wrong';
+          q.classList.remove('right', 'wrong');
+          q.classList.add('finished', 'show-answer', grade);
+          q.querySelectorAll('.blank-input').forEach(input => {
+            input.disabled = true;
+            const gradeResult = element('span', 'result ' + grade, result.correct ? '正确' : '错误');
+            input.closest('.input-wrapper').append(gradeResult);
+          });
+        });
         status.textContent = '平台记录已确认';
       } catch (error) { status.textContent = error.message; }
     };

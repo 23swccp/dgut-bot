@@ -6,9 +6,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from dgutbot.domain.yxy_backend import Activity, ApiClient, AppConfig, Course, MonitorState, SignBackend
+from dgutbot.domain.yxy_backend import Activity, AppConfig, BrowserApiClient, Course, MonitorState, SignBackend
 from dgutbot.app.backend_commands import EventBuffer
 from dgutbot.app.browser_paths import registered_browser_paths
 
@@ -102,12 +102,122 @@ class BackendTests(unittest.TestCase):
         )
         self.assertFalse(config.course_quiz_auto_answer)
 
-    def test_api_client_retries_safe_gets_but_not_posts(self):
-        client = ApiClient({"User-Agent": "test"})
-        retry = client.session.get_adapter("https://").max_retries
-        self.assertIn("GET", retry.allowed_methods)
-        self.assertNotIn("POST", retry.allowed_methods)
-        self.assertIn(429, retry.status_forcelist)
+    def test_browser_api_uses_same_origin_page_and_passes_request_as_cdp_argument(self):
+        sent = []
+
+        class FakeWebSocket:
+            def settimeout(self, _timeout):
+                pass
+
+            def send(self, raw):
+                sent.append(json.loads(raw))
+
+            def recv(self):
+                message = sent[-1]
+                if message["method"] == "Runtime.evaluate":
+                    result = {"result": {"objectId": "window-1"}}
+                else:
+                    result = {"result": {"value": {
+                        "status": 200, "text": '{"status":200}', "contentType": "application/json",
+                    }}}
+                return json.dumps({"id": message["id"], "result": result})
+
+            def close(self):
+                pass
+
+        discovery = Mock()
+        discovery.raise_for_status.return_value = None
+        discovery.json.return_value = [
+            {
+                "id": "lms-1", "type": "page", "url": "https://lms.dgut.edu.cn/home",
+                "webSocketDebuggerUrl": "ws://lms-1",
+            },
+            {
+                "id": "application-1", "type": "page", "url": "https://application.dgut.edu.cn/home",
+                "webSocketDebuggerUrl": "ws://application-1",
+            },
+        ]
+        client = BrowserApiClient(lambda: 9222, {"Authorization": "secret-token"})
+        with patch("yxy_backend.requests.get", return_value=discovery), patch(
+            "yxy_backend.create_connection", return_value=FakeWebSocket(),
+        ) as connect:
+            response = client.request(
+                "POST", "https://application.dgut.edu.cn/classroomapi/sign",
+                json={"attendanceID": 12},
+            )
+
+        self.assertEqual(response.json(), {"status": 200})
+        connect.assert_called_once_with("ws://application-1", timeout=15, enable_multithread=True)
+        call = next(item for item in sent if item["method"] == "Runtime.callFunctionOn")
+        request = call["params"]["arguments"][0]["value"]
+        self.assertEqual(request["headers"]["Authorization"], "secret-token")
+        self.assertEqual(json.loads(request["body"]), {"attendanceID": 12})
+        self.assertNotIn("secret-token", call["params"]["functionDeclaration"])
+
+    def test_browser_api_requires_an_lms_origin_page(self):
+        discovery = Mock()
+        discovery.raise_for_status.return_value = None
+        discovery.json.return_value = [{
+            "id": "other", "type": "page", "url": "https://example.com/",
+            "webSocketDebuggerUrl": "ws://other",
+        }]
+        client = BrowserApiClient(lambda: 9222, {}, auto_create=False)
+        with patch("yxy_backend.requests.get", return_value=discovery):
+            with self.assertRaisesRegex(RuntimeError, "lms.dgut.edu.cn"):
+                client.request("GET", "https://lms.dgut.edu.cn/courseapi/courses/students")
+
+    def test_browser_api_never_sends_credentials_to_an_unapproved_origin(self):
+        client = BrowserApiClient(lambda: 9222, {"Authorization": "secret-token"})
+        with patch("yxy_backend.requests.get") as discovery:
+            with self.assertRaisesRegex(ValueError, "学校域名"):
+                client.request("POST", "https://example.com/collect", json={"value": 1})
+        discovery.assert_not_called()
+
+    def test_browser_api_creates_missing_origin_in_background_and_owns_only_that_target(self):
+        empty, version, created, closed = Mock(), Mock(), Mock(), Mock()
+        for response in (empty, version, created, closed):
+            response.raise_for_status.return_value = None
+        empty.json.return_value = []
+        version.json.return_value = {"webSocketDebuggerUrl": "ws://browser"}
+        created.json.return_value = [{
+            "id": "owned-1", "type": "page", "url": "https://lms.dgut.edu.cn/favicon.ico",
+            "webSocketDebuggerUrl": "ws://owned-1",
+        }]
+
+        class BrowserSocket:
+            def __init__(self):
+                self.last = None
+                self.sent = []
+
+            def send(self, raw):
+                self.last = json.loads(raw)
+                self.sent.append(self.last)
+
+            def recv(self):
+                result = {"targetId": "owned-1"} if self.last["method"] == "Target.createTarget" else {}
+                return json.dumps({"id": self.last["id"], "result": result})
+
+            def close(self):
+                pass
+
+        responses = iter((empty, version, created, closed))
+        socket = BrowserSocket()
+        client = BrowserApiClient(lambda: 9222, {"Authorization": "secret-token"})
+        with patch("yxy_backend.requests.get", side_effect=lambda *_args, **_kwargs: next(responses)) as get, patch(
+            "yxy_backend.create_connection", return_value=socket,
+        ) as connect:
+            target = client._discover_target("https://lms.dgut.edu.cn")
+            client.close()
+
+        self.assertEqual(target["id"], "owned-1")
+        connect.assert_called_once_with("ws://browser", timeout=10, enable_multithread=True)
+        self.assertEqual([item["method"] for item in socket.sent], ["Storage.setCookies", "Target.createTarget"])
+        cookie = socket.sent[0]["params"]["cookies"][0]
+        self.assertEqual(cookie["name"], "AUTHORIZATION")
+        self.assertEqual(cookie["domain"], ".dgut.edu.cn")
+        self.assertTrue(cookie["secure"])
+        self.assertTrue(cookie["httpOnly"])
+        self.assertIn("/json/close/owned-1", get.call_args_list[-1].args[0])
 
     def test_course_selection_accepts_one_exact_course_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -218,6 +328,22 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(backend.token, "test-token")
             self.assertEqual(backend.user_id, 123)
             self.assertEqual([course.id for course in backend.courses], [101])
+
+    def test_browser_login_extracts_user_id_from_encoded_userinfo_cookie(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            cookies = [
+                {"domain": ".dgut.edu.cn", "name": "authorization", "value": "test-token"},
+                {"domain": ".dgut.edu.cn", "name": "USERINFO", "value": "%7B%22userId%22%3A456%7D"},
+            ]
+            with (
+                patch.object(backend, "_get_ws_url", return_value="ws://test"),
+                patch.object(backend, "_cookies", return_value=cookies),
+                patch.object(backend, "_fetch_courses", return_value=[Course(101, "数据结构")]),
+            ):
+                self.assertTrue(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+            self.assertEqual(backend.token, "test-token")
+            self.assertEqual(backend.user_id, 456)
 
     def test_browser_detection_reports_paths_and_prefers_edge(self):
         with tempfile.TemporaryDirectory() as directory:

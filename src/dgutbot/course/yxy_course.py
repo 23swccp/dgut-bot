@@ -5,8 +5,9 @@
 
 测验自动作答由 yxy_quiz.QuizHandler 承担（"题库学习"策略，可通过
 CourseConfig.quiz_auto_answer 关闭）；本模块只负责检测未完成测验并上报
-事件，不读取题目答案。同时不模拟鼠标活动、随机点击、随机按键或其他
-虚假在线行为，所有点击均经 CDP Input 域产生真实事件。
+事件，不读取题目答案。课程动作只会放缓原本已经通过校验的点击并加入
+细微轨迹变化；不会随机乱点、随机按键或制造无意义的在线活动。
+所有点击均经 CDP Input 域产生真实事件。
 """
 
 from __future__ import annotations
@@ -1267,24 +1268,87 @@ class ActionExecutor:
         *,
         is_running: Callable[[], bool] = lambda: True,
         sleep: Callable[[float], None] = time.sleep,
+        natural_interactions: bool = False,
     ) -> None:
         self._cdp_call = cdp_call
         self._evaluate = evaluate
         self._is_running = is_running
         self._sleep = sleep
+        self._natural_interactions = natural_interactions
+        self._pointer_position: tuple[float, float] | None = None
         self._action_lock = threading.Lock()
+
+    def set_natural_interactions(self, enabled: bool) -> None:
+        """切换有限的真实动作节奏；不生成与任务无关的输入。"""
+        self._natural_interactions = bool(enabled)
+        self._pointer_position = None
+
+    def _move_pointer(self, x: float, y: float) -> bool:
+        if not self._natural_interactions:
+            return self._cdp_call(
+                "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}, timeout=5.0,
+            ) is not None
+
+        # 目标坐标由页面命中测试提供。这里只在中心附近加入极小偏移，避免越出
+        # 小按钮；移动过程使用缓入缓出轨迹，而不是瞬间跳到目标点。
+        target_x = max(0.0, x + random.uniform(-2.5, 2.5))
+        target_y = max(0.0, y + random.uniform(-2.5, 2.5))
+        nearby_hit = self._evaluate(
+            "(function(x,y,nx,ny){var a=document.elementFromPoint(x,y);"
+            "var b=document.elementFromPoint(nx,ny);return !!(a&&b&&"
+            "(a===b||a.contains(b)||b.contains(a)));})"
+            f"({json.dumps(x)},{json.dumps(y)},{json.dumps(target_x)},{json.dumps(target_y)})",
+            2.0,
+        )
+        if nearby_hit is not True:
+            target_x, target_y = x, y
+        start_x, start_y = self._pointer_position or (
+            max(0.0, target_x + random.uniform(-80.0, 80.0)),
+            max(0.0, target_y + random.uniform(-55.0, 55.0)),
+        )
+        steps = random.randint(4, 8)
+        curve = random.uniform(-5.0, 5.0)
+        for index in range(1, steps + 1):
+            if not self._is_running():
+                return False
+            progress = index / steps
+            eased = progress * progress * (3.0 - 2.0 * progress)
+            bend = math.sin(math.pi * progress) * curve
+            move_x = max(0.0, start_x + (target_x - start_x) * eased + bend)
+            move_y = max(0.0, start_y + (target_y - start_y) * eased - bend * 0.35)
+            if self._cdp_call(
+                "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": move_x, "y": move_y}, timeout=5.0,
+            ) is None:
+                return False
+            if index < steps:
+                self._sleep(random.uniform(0.012, 0.032))
+        self._pointer_position = (target_x, target_y)
+        return True
 
     def click_viewport_point(self, x: float, y: float) -> bool:
         if not self._is_running() or not math.isfinite(x) or not math.isfinite(y) or x < 0 or y < 0:
             return False
-        events = (
-            {"type": "mouseMoved", "x": x, "y": y},
-            {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1},
-            {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1},
-        )
-        for params in events:
-            if self._cdp_call("Input.dispatchMouseEvent", params, timeout=5.0) is None:
-                return False
+        if not self._move_pointer(x, y):
+            return False
+        click_x, click_y = self._pointer_position if self._natural_interactions and self._pointer_position else (x, y)
+        if self._natural_interactions:
+            self._sleep(random.uniform(0.025, 0.080))
+        if self._cdp_call(
+            "Input.dispatchMouseEvent",
+            {"type": "mousePressed", "x": click_x, "y": click_y, "button": "left", "clickCount": 1},
+            timeout=5.0,
+        ) is None:
+            return False
+        if self._natural_interactions:
+            self._sleep(random.uniform(0.045, 0.125))
+        if self._cdp_call(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseReleased", "x": click_x, "y": click_y, "button": "left", "clickCount": 1},
+            timeout=5.0,
+        ) is None:
+            return False
+        if self._natural_interactions:
+            self._sleep(random.uniform(0.080, 0.220))
         return True
 
     def execute_click(self, x: float, y: float) -> bool:
@@ -1512,6 +1576,7 @@ class CourseController:
             self._cdp_call,
             self.eval_js,
             is_running=lambda: self._running,
+            natural_interactions=True,
         )
 
     @staticmethod
@@ -2520,6 +2585,9 @@ class CourseController:
 
     def _perform_navigation(self) -> None:
         started_at = time.monotonic()
+        # 页面明确完成后仍留出一个短阅读/反应窗口；等待可被停止操作立即打断。
+        if self._stop_event.wait(random.uniform(1.4, 3.8)) or not self._running:
+            return
         # 每个恢复周期只点击一次；由外层看门狗做带间隔的有限重试，避免连续点按。
         result = self.action_executor.execute_navigation(max_retries=1, verify_timeout=10.0)
         if result.ok:

@@ -1208,3 +1208,415 @@
     font-size: 16px;
   }
 }
+
+/* 签到页：高频轮询原地更新，事件流只保留值得回看的状态变化。 */
+.sign-terminal {
+  background: #f7f9fb;
+}
+
+.sign-overview {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: center;
+  min-height: 92px;
+  padding: 17px 28px 17px 70px;
+  border-top: 1px solid #e6eaef;
+  background: #fff;
+  box-shadow: 0 -7px 22px #1f293708;
+}
+
+.sign-overview-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sign-radar {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #edf1f5;
+  color: #7d8898;
+  font: 700 20px/1 "Cascadia Mono", monospace;
+}
+
+.sign-radar.active {
+  color: #008b4c;
+  background: #e8f7ef;
+}
+
+.sign-course-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.sign-course-line > strong {
+  overflow: hidden;
+  color: #273142;
+  font-size: 16px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sign-overview-main p {
+  margin: 4px 0 0;
+  color: #7d8797;
+  font-size: 12px;
+}
+
+.sign-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #f0f2f5;
+  color: #737e8f;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sign-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sign-state.running {
+  background: #e8f7ef;
+  color: #00864a;
+}
+
+.sign-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(78px, auto));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #e8ecf0;
+  border-radius: 10px;
+  background: #e8ecf0;
+}
+
+.sign-stats .status-item {
+  min-width: 82px;
+  padding: 8px 12px;
+  text-align: right;
+}
+
+.sign-stats .status-item span { font-size: 10px; }
+.sign-stats .status-item strong { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.sign-event-log {
+  padding: 16px 28px 10px 70px;
+  background: #f7f9fb;
+}
+
+.sign-day-label {
+  margin: 0 0 5px 84px;
+  color: #98a2b1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+
+.sign-event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 62px 22px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 58px;
+  padding: 9px 0;
+}
+
+.sign-event + .sign-event::before {
+  content: "";
+  position: absolute;
+  top: -16px;
+  left: 82px;
+  width: 1px;
+  height: 35px;
+  background: #dfe5eb;
+}
+
+.sign-event:last-of-type::after {
+  content: "";
+  position: absolute;
+  top: 31px;
+  bottom: -29px;
+  left: 82px;
+  width: 1px;
+  background: #dfe5eb;
+}
+
+.sign-event time {
+  padding-top: 3px;
+  color: #919baa;
+  font: 12px/1.5 "Cascadia Mono", monospace;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sign-event-mark {
+  position: relative;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e9f1ff;
+  color: #3672d9;
+  font: 700 11px/1 "Cascadia Mono", monospace;
+}
+
+.sign-event.success .sign-event-mark { background: #e5f6ed; color: #00864a; }
+.sign-event.warning .sign-event-mark { background: #fff1d9; color: #a76000; }
+.sign-event.error .sign-event-mark { background: #fdebec; color: #be343c; }
+.sign-event.muted .sign-event-mark { background: #edf0f3; color: #7f8998; }
+
+.sign-event.live .sign-event-mark {
+  background: #e5f6ed;
+  color: #00864a;
+}
+
+.sign-event.live .sign-event-mark i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 4px #d7f0e2;
+  animation: sign-monitor-pulse 1.8s ease-in-out infinite;
+}
+
+.sign-event.live strong { color: #087a47; }
+
+@keyframes sign-monitor-pulse {
+  0%, 100% { opacity: .55; transform: scale(.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sign-event.live .sign-event-mark i { animation: none; }
+}
+
+.sign-event > div {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+}
+
+.sign-event strong {
+  color: #303a4a;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.sign-event small {
+  color: #838d9d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sign-terminal .command {
+  position: relative;
+  z-index: 2;
+  padding: 8px 70px 20px 142px;
+  gap: 14px;
+  border-top: 0;
+  background: #f7f9fb;
+}
+
+.sign-terminal .command::before,
+.sign-terminal .command::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  background: #dfe5eb;
+}
+
+.sign-terminal .command::before {
+  top: -22px;
+  bottom: 50%;
+  left: 152px;
+  width: 1px;
+}
+
+.sign-terminal .command::after {
+  top: 50%;
+  left: 153px;
+  width: 25px;
+  height: 1px;
+}
+
+.sign-terminal .command b {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e5f6ed;
+  color: #008d4d;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sign-terminal .command input {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  padding-left: 8px;
+  background: #f7f9fb;
+}
+
+/* 选课列表作为事件流的下一层，而不是独立悬浮卡片。 */
+.sign-terminal.course-picking .command {
+  padding-bottom: 12px;
+  border-top: 0;
+  background: #f7f9fb;
+}
+
+.sign-terminal.course-picking .command::before {
+  bottom: -16px;
+}
+
+.sign-terminal .course-quick-pick {
+  position: relative;
+  width: auto;
+  margin: 0 70px 28px 142px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sign-terminal .course-quick-pick::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: -70px;
+  bottom: 27px;
+  left: 11px;
+  width: 1px;
+  background: #dfe5eb;
+}
+
+.sign-terminal .course-picker-head,
+.sign-terminal .course-picker-help {
+  position: relative;
+  z-index: 1;
+  margin-left: 34px;
+  padding: 8px 10px;
+  border: 0;
+  background: #f7f9fb;
+}
+
+.sign-terminal .course-picker-head::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 23px;
+  height: 1px;
+  background: #dfe5eb;
+}
+
+.sign-terminal .course-picker-head strong {
+  color: #576273;
+  font-size: 12px;
+}
+
+.sign-terminal .course-options {
+  position: relative;
+  z-index: 1;
+  max-height: 390px;
+  padding: 2px 6px 2px 34px;
+  scrollbar-gutter: stable;
+}
+
+.sign-terminal .course-option {
+  position: relative;
+  min-height: 54px;
+  margin: 2px 0;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  background: #fff;
+}
+
+.sign-terminal .course-option::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 23px;
+  height: 1px;
+  background: #dfe5eb;
+}
+
+.sign-terminal .course-option::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 3px);
+  right: calc(100% + 20px);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cbd4de;
+}
+
+.sign-terminal .course-option:hover,
+.sign-terminal .course-option.active {
+  border-color: #cfe8da;
+  background: #eaf8f0;
+}
+
+.sign-terminal .course-option:hover::after,
+.sign-terminal .course-option.active::after {
+  background: #009b55;
+  box-shadow: 0 0 0 4px #dff3e8;
+}
+
+.sign-terminal .course-picker-help {
+  color: #929cab;
+  font-size: 11px;
+}
+
+@media (max-width: 1050px) {
+  .sign-overview { grid-template-columns: 1fr; gap: 12px; }
+  .sign-stats { justify-self: start; margin-left: 48px; }
+  .sign-stats .status-item { text-align: left; }
+}
+
+@media (max-width: 700px) {
+  .sign-overview,
+  .sign-event-log { padding-left: 54px; padding-right: 16px; }
+  .sign-stats { margin-left: 0; grid-template-columns: repeat(3, minmax(66px, 1fr)); width: 100%; }
+  .sign-stats .status-item { min-width: 0; padding: 7px 8px; }
+  .sign-event { grid-template-columns: 54px 20px minmax(0, 1fr); gap: 7px; }
+  .sign-event + .sign-event::before { left: 70px; }
+  .sign-event:last-of-type::after { left: 70px; }
+  .sign-event-mark { width: 20px; height: 20px; }
+  .sign-day-label { margin-left: 71px; }
+  .sign-terminal .command { padding-left: 60px; padding-right: 16px; }
+  .sign-terminal .command::before { left: 69px; }
+  .sign-terminal .command::after { left: 70px; width: 24px; }
+  .sign-terminal .course-quick-pick { margin-left: 59px; margin-right: 16px; }
+}

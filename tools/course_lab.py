@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
          "stale_page", "stale_structure", "unsupported", "expired", "occluded", "prefilled",
-         "server_error", "response_lost", "late_response", "cancelled", "document")
+         "multi_blank", "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
 
 
 def check(condition, detail):
@@ -45,17 +45,22 @@ def fixture(seed, case):
         opts = [{"id": label, "text": str(n)} for label, n in zip("ABCD", options)]
         truth = bool(rng.randrange(2))
         word = f"中文答案-{seed}"
+        blank_values = [word, 'A&B <测试> \\"']
+        if case == "multi_blank":
+            blank_values.append(f"第三空-{seed}")
         questions = [
             {"id": page_id + "-choice", "type": "single_choice", "sourceType": "单选题",
              "prompt": f"计算 {a} + {b} = ?", "options": opts},
             {"id": page_id + "-bool", "type": "true_false", "sourceType": "判断题",
              "prompt": f"判断：{a} < {a + 1 if truth else a - 1}", "options": []},
             {"id": page_id + "-blank", "type": "fill_blank", "sourceType": "填空题",
-             "prompt": f"按顺序填入「{word}」和「A&B <测试> \\\"」", "options": []},
+             "prompt": "按顺序填入" + "、".join(f"「{value}」" for value in blank_values),
+             "options": [], "blankCount": len(blank_values)},
         ]
         expected[page_id] = {questions[0]["id"]: [opts[options.index(a + b)]["id"]],
-                             questions[1]["id"]: truth, questions[2]["id"]: [word, 'A&B <测试> \\"']}
+                             questions[1]["id"]: truth, questions[2]["id"]: blank_values}
         if case == "unsupported":
+            questions[0]["type"] = "multiple_choice"
             questions[0]["sourceType"] = "多选题"
         pages.append({"id": page_id, "questions": questions})
     return {"pages": pages, "document": case == "document", "timed": case == "timed", "long": case == "long_narrow", "slow": case == "slow_render",
@@ -136,7 +141,8 @@ class Lab:
                     return self.reply(404, {"error": "Unknown fixture run"})
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 accepted = body["answers"] == record["expected"].get(body["pageId"])
-                record["submissions"].append({**body, "accepted": accepted})
+                correct = accepted and record["case"] != "graded_wrong"
+                record["submissions"].append({**body, "accepted": accepted, "correct": correct})
                 if record["case"] == "delayed":
                     time.sleep(1.5)
                 if record["case"] == "late_response":
@@ -144,7 +150,8 @@ class Lab:
                 if record["case"] == "response_lost":
                     self.close_connection = True
                     return  # 服务端已保存，客户端没收到回执；不能重试提交。
-                self.reply(503 if record["case"] == "server_error" else 200, {"accepted": accepted})
+                self.reply(503 if record["case"] == "server_error" else 200,
+                           {"accepted": accepted, "correct": correct})
 
         try:
             site = self.serve(partial(Site, directory=str(ROOT / "quiz_simulator")))
@@ -248,6 +255,9 @@ class Lab:
             check(request["pageId"] == page["id"], request)
             check(len(request["questions"]) == 3, request)
             check(all("answerSchema" in q for q in request["questions"]), request)
+            if case == "multi_blank":
+                blank = next(q for q in request["questions"] if q["type"] == "fill_blank")
+                check(blank["blankCount"] == 3, request)
             snapshot = self.evaluate("window.labSnapshot()")
             if case == "unsupported":
                 check(request["questions"][0]["type"] == "unsupported", request)
@@ -305,13 +315,18 @@ class Lab:
                 break
             check(result["state"] == "completed" and result["result"] == {"completedCount": 3, "submitAttempts": 1}, result)
             check(len(record["submissions"]) == index + 1 and all(s["accepted"] for s in record["submissions"]), record["submissions"])
-        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid"}:
+        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "graded_wrong"}:
             final_task = wait_until(lambda: self.task(task_id), lambda t: t["state"] in {"completed", "failed", "cancelled"})
             check(final_task["state"] == "completed", final_task)
         browser_result = self.evaluate("window.labSnapshot()")
         check(browser_result["untrusted"] == 0, browser_result)
         check(browser_result["starts"] == int(case == "timed"), browser_result)
         check(browser_result["next"] == (1 if case == "roundtrip" else 0), browser_result)
+        if case == "multi_blank":
+            check(browser_result["lockedInputs"] == 3 and browser_result["answerResults"] == 3, browser_result)
+        if case == "graded_wrong":
+            check(browser_result["lockedInputs"] == 2 and browser_result["wrongResults"] == 2, browser_result)
+            check(record["submissions"] and record["submissions"][0]["accepted"] and not record["submissions"][0]["correct"], record["submissions"])
         return {"case": case, "seed": seed, "passed": True, "browser": browser_result, "submissions": record["submissions"]}
 
     def close(self):

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title description">
   <title id="title">莞工小皮卡登录流程</title>
-  <desc id="description">程序启动后自动读取登录缓存。Token 有效时直接读取课程；Token 失效时自动打开登录页，并在登录完成后自动检测新 Token，最后显示课程列表。</desc>
+  <desc id="description">程序启动后自动读取登录缓存并检查调试浏览器会话。会话和学校页面可用时通过浏览器读取课程；不可用时自动打开登录页，并在登录完成后显示课程列表。</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#68707d"/>
@@ -26,12 +26,12 @@
 
   <path class="line" d="M 480 172 L 480 202"/>
   <path class="decision" d="M 480 202 L 610 262 L 480 322 L 350 262 Z"/>
-  <text class="label" x="480" y="262">Token 是否有效？</text>
+  <text class="label" x="480" y="262">浏览器会话可用？</text>
 
   <path class="line" d="M 350 262 L 205 262 L 205 350"/>
   <text class="branch" x="282" y="246">有效</text>
   <rect class="node" x="65" y="352" width="280" height="58" rx="8"/>
-  <text class="label" x="205" y="382">自动读取课程</text>
+  <text class="label" x="205" y="382">通过浏览器读取课程</text>
 
   <path class="line" d="M 610 262 L 755 262 L 755 350"/>
   <text class="branch" x="678" y="246">失效</text>

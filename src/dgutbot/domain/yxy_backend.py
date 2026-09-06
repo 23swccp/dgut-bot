@@ -16,11 +16,9 @@ from enum import Enum
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from websocket import create_connection
 
 from dgutbot.app.browser_paths import (
@@ -163,41 +161,303 @@ class MonitorState(str, Enum):
     STOPPED = "stopped"
 
 
-class ApiClient:
-    """集中处理 HTTP 超时、状态码与 JSON 错误。"""
+@dataclass(frozen=True)
+class BrowserResponse:
+    """浏览器 fetch 响应的最小兼容对象。"""
 
-    def __init__(self, headers: dict) -> None:
-        self.headers = headers
-        self.session = requests.Session()
-        retry = Retry(
-            total=3,
-            connect=3,
-            read=2,
-            status=2,
-            backoff_factor=0.4,
-            status_forcelist=(429, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
-            respect_retry_after_header=True,
-            raise_on_status=False,
+    status_code: int
+    text: str
+    content_type: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 400
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            raise RuntimeError(f"浏览器请求返回 HTTP {self.status_code}")
+
+    def json(self) -> Any:
+        try:
+            return json.loads(self.text)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("服务返回了无法解析的数据") from error
+
+
+class BrowserApiClient:
+    """在与目标接口同源的页面内执行 fetch，复用 Chromium 网络栈与会话。"""
+
+    LMS_ORIGIN = "https://lms.dgut.edu.cn"
+    ALLOWED_ORIGINS = frozenset({LMS_ORIGIN, "https://application.dgut.edu.cn"})
+    _FETCH_FUNCTION = r"""
+async function(request) {
+  const controller = new AbortController();
+  const timer = setTimeout(function() { controller.abort(); }, request.timeoutMs);
+  try {
+    const options = {
+      method: request.method,
+      credentials: 'include',
+      headers: request.headers,
+      redirect: 'error',
+      signal: controller.signal
+    };
+    if (request.body !== null) options.body = request.body;
+    const response = await fetch(request.url, options);
+    const text = (await response.text()).slice(0, request.maxResponseChars);
+    return {
+      status: response.status,
+      text: text,
+      contentType: response.headers.get('content-type') || ''
+    };
+  } catch (error) {
+    return {transportError: String(error && error.name || 'FetchError')};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+"""
+
+    def __init__(
+        self,
+        debug_port: Callable[[], int],
+        headers: dict[str, str],
+        *,
+        auto_create: bool = True,
+    ) -> None:
+        self._debug_port = debug_port
+        self._headers = headers
+        self._auto_create = auto_create
+        self._ws = None
+        self._target_id = ""
+        self._owned_target_ids: set[str] = set()
+        self._message_id = 0
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _is_origin_page(target: dict, origin: str) -> bool:
+        if target.get("type") != "page":
+            return False
+        try:
+            parts = urlsplit(str(target.get("url") or ""))
+        except ValueError:
+            return False
+        return f"{parts.scheme}://{parts.netloc}" == origin
+
+    def _list_targets(self) -> list[dict]:
+        try:
+            response = requests.get(f"http://127.0.0.1:{self._debug_port()}/json", timeout=2)
+            response.raise_for_status()
+            targets = response.json()
+        except (requests.RequestException, ValueError, TypeError) as error:
+            raise RuntimeError("无法连接调试浏览器") from error
+        if not isinstance(targets, list):
+            raise RuntimeError("调试浏览器返回了无效的页面列表")
+        return [item for item in targets if isinstance(item, dict)]
+
+    def _target_for_origin(self, targets: list[dict], origin: str) -> dict | None:
+        return next((
+            item for item in targets
+            if self._is_origin_page(item, origin)
+        ), None)
+
+    def _create_origin_target(self, origin: str) -> None:
+        try:
+            response = requests.get(
+                f"http://127.0.0.1:{self._debug_port()}/json/version", timeout=2,
+            )
+            response.raise_for_status()
+            browser_ws_url = str(response.json().get("webSocketDebuggerUrl") or "")
+        except (requests.RequestException, ValueError, TypeError, AttributeError) as error:
+            raise RuntimeError("无法读取调试浏览器控制端点") from error
+        if not browser_ws_url:
+            raise RuntimeError("调试浏览器未提供控制端点")
+        try:
+            ws = create_connection(browser_ws_url, timeout=10, enable_multithread=True)
+            try:
+                message_id = 0
+
+                def browser_call(method: str, params: dict) -> dict:
+                    nonlocal message_id
+                    message_id += 1
+                    ws.send(json.dumps({"id": message_id, "method": method, "params": params}))
+                    while True:
+                        message = json.loads(ws.recv())
+                        if message.get("id") != message_id:
+                            continue
+                        if message.get("error"):
+                            raise RuntimeError("浏览器拒绝恢复登录缓存或创建后台页面")
+                        return message.get("result") or {}
+
+                authorization = str(self._headers.get("Authorization") or "")
+                if authorization:
+                    browser_call("Storage.setCookies", {"cookies": [{
+                        "name": "AUTHORIZATION",
+                        "value": authorization,
+                        "domain": ".dgut.edu.cn",
+                        "path": "/",
+                        "secure": True,
+                        "httpOnly": True,
+                    }]})
+                result = browser_call(
+                    "Target.createTarget",
+                    {"url": f"{origin}/favicon.ico", "background": True},
+                )
+                target_id = str(result.get("targetId") or "")
+                if not target_id:
+                    raise RuntimeError("浏览器未返回新页面标识")
+                self._owned_target_ids.add(target_id)
+                return
+            finally:
+                ws.close()
+        except RuntimeError:
+            raise
+        except Exception as error:
+            raise RuntimeError("创建后台学校页面失败") from error
+
+    def _discover_target(self, origin: str) -> dict:
+        targets = self._list_targets()
+        target = self._target_for_origin(targets, origin)
+        if target is None and self._auto_create:
+            self._create_origin_target(origin)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                targets = self._list_targets()
+                target = self._target_for_origin(targets, origin)
+                if target is not None:
+                    break
+                time.sleep(0.1)
+        if not target or not target.get("webSocketDebuggerUrl"):
+            host = urlsplit(origin).netloc
+            raise RuntimeError(f"未找到已打开的学校页面：{host}")
+        return target
+
+    def _disconnect(self) -> None:
+        ws, self._ws = self._ws, None
+        self._target_id = ""
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        with self._lock:
+            self._disconnect()
+            target_ids, self._owned_target_ids = self._owned_target_ids, set()
+            for target_id in target_ids:
+                try:
+                    requests.get(
+                        f"http://127.0.0.1:{self._debug_port()}/json/close/{quote(target_id, safe='')}",
+                        timeout=2,
+                    )
+                except requests.RequestException:
+                    pass
+
+    def _connect(self, target: dict) -> None:
+        target_id = str(target.get("id") or "")
+        if self._ws is not None and target_id and target_id == self._target_id:
+            return
+        self._disconnect()
+        try:
+            self._ws = create_connection(
+                str(target["webSocketDebuggerUrl"]), timeout=15, enable_multithread=True,
+            )
+        except Exception as error:
+            self._disconnect()
+            raise RuntimeError("连接 LMS 页面失败") from error
+        self._target_id = target_id
+
+    def _call(self, method: str, params: dict, timeout: float = 15.0) -> dict:
+        if self._ws is None:
+            raise RuntimeError("浏览器请求桥尚未连接")
+        self._message_id += 1
+        message_id = self._message_id
+        try:
+            self._ws.settimeout(timeout)
+            self._ws.send(json.dumps({"id": message_id, "method": method, "params": params}))
+            while True:
+                message = json.loads(self._ws.recv())
+                if message.get("id") != message_id:
+                    continue
+                if message.get("error"):
+                    raise RuntimeError("浏览器拒绝执行请求")
+                return message.get("result") or {}
+        except RuntimeError:
+            raise
+        except Exception as error:
+            self._disconnect()
+            raise RuntimeError("浏览器请求桥连接已中断") from error
+
+    def request(self, method: str, url: str, **kwargs) -> BrowserResponse:
+        method = str(method or "GET").upper()
+        if method not in {"GET", "POST"}:
+            raise ValueError(f"浏览器请求桥不支持 {method}")
+        try:
+            parts = urlsplit(str(url))
+        except ValueError as error:
+            raise ValueError("浏览器请求地址无效") from error
+        if f"{parts.scheme}://{parts.netloc}" not in self.ALLOWED_ORIGINS:
+            raise ValueError("浏览器请求地址不在允许的学校域名内")
+        params = kwargs.pop("params", None)
+        payload = kwargs.pop("json", None)
+        timeout = kwargs.pop("timeout", 15)
+        if kwargs:
+            raise TypeError(f"不支持的浏览器请求参数：{', '.join(sorted(kwargs))}")
+        if params:
+            query = urlencode(params, doseq=True)
+            url = f"{url}{'&' if '?' in url else '?'}{query}"
+        headers = {"Accept": "application/json, text/plain, */*"}
+        authorization = str(self._headers.get("Authorization") or "")
+        if authorization:
+            headers["Authorization"] = authorization
+        body = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json;charset=UTF-8"
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        request_data = {
+            "url": url,
+            "method": method,
+            "headers": headers,
+            "body": body,
+            "timeoutMs": max(1000, min(60000, int(float(timeout) * 1000))),
+            "maxResponseChars": 1_048_576,
+        }
+        with self._lock:
+            origin = f"{parts.scheme}://{parts.netloc}"
+            target = self._discover_target(origin)
+            self._connect(target)
+            global_result = self._call(
+                "Runtime.evaluate", {"expression": "globalThis", "returnByValue": False}, timeout=5,
+            )
+            object_id = (global_result.get("result") or {}).get("objectId")
+            if not object_id:
+                raise RuntimeError("无法取得学校页面执行环境")
+            result = self._call(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": object_id,
+                    "functionDeclaration": self._FETCH_FUNCTION,
+                    "arguments": [{"value": request_data}],
+                    "awaitPromise": True,
+                    "returnByValue": True,
+                },
+                timeout=max(5.0, float(timeout) + 2.0),
+            )
+        if result.get("exceptionDetails"):
+            raise RuntimeError("学校页面执行浏览器请求失败")
+        value = (result.get("result") or {}).get("value")
+        if not isinstance(value, dict):
+            raise RuntimeError("浏览器返回了无效的请求结果")
+        if value.get("transportError"):
+            raise RuntimeError(f"浏览器请求失败：{value['transportError']}")
+        response = BrowserResponse(
+            int(value.get("status") or 0), str(value.get("text") or ""), str(value.get("contentType") or ""),
         )
-        adapter = HTTPAdapter(max_retries=retry)
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
-
-    def request(self, method: str, url: str, **kwargs) -> requests.Response:
-        kwargs.setdefault("headers", self.headers)
-        kwargs.setdefault("timeout", (5, 10))
-        response = self.session.request(method, url, **kwargs)
         response.raise_for_status()
         return response
 
     def json(self, method: str, url: str, **kwargs) -> dict:
-        try:
-            value = self.request(method, url, **kwargs).json()
-        except requests.RequestException as error:
-            raise RuntimeError(f"网络或认证错误：{error}") from error
-        except ValueError as error:
-            raise RuntimeError("服务返回了无法解析的数据") from error
+        value = self.request(method, url, **kwargs).json()
         if not isinstance(value, dict):
             raise RuntimeError("服务返回的数据结构不符合预期")
         return value
@@ -233,10 +493,17 @@ class SignBackend:
         self.monitor_lock = threading.Lock()
         self.monitor_thread: threading.Thread | None = None
         self.monitor_state = MonitorState.IDLE
-        self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Content-Type": "application/json;charset=UTF-8", "Origin": "https://lms.dgut.edu.cn", "Referer": "https://lms.dgut.edu.cn/"}
+        self.monitor_round = 0
+        self.monitor_interval = max(2, int(self.config.poll_interval))
+        self.monitor_started_at = ""
+        self.monitor_last_check = ""
+        self.monitor_last_result = "等待首次检查"
+        # 远端课程/签到请求只从这里读取 Authorization；其余网络请求头均由
+        # Chromium 根据 LMS 页面上下文生成。User-Agent 仅供登录恢复/AI 兼容层使用。
+        self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         if self.token:
             self.headers["Authorization"] = self.token
-        self.api = ApiClient(self.headers)
+        self.api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
         self._course_controller = None
         self._course_operation_lock = threading.RLock()
         self._course_reservation_lock = threading.Lock()
@@ -467,6 +734,26 @@ class SignBackend:
         item = cookies.get(name)
         return item.value if item else ""
 
+    @staticmethod
+    def _browser_cookie(cookies: list[dict], name: str) -> str:
+        expected = name.casefold()
+        return next((
+            str(item.get("value") or "") for item in cookies
+            if str(item.get("name") or "").casefold() == expected
+        ), "")
+
+    @classmethod
+    def _browser_user_id(cls, cookies: list[dict]) -> int | None:
+        direct = cls._browser_cookie(cookies, "userid")
+        if direct.isdigit():
+            return int(direct)
+        raw_user = cls._browser_cookie(cookies, "USERINFO")
+        try:
+            value = json.loads(unquote(raw_user)).get("userId") if raw_user else None
+            return int(value) if value is not None else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+
     def _relogin_with_account(self) -> bool:
         """使用用户明确保存的账号密码重新获取 Token；每次调用只尝试一次。"""
         account = self._load_account()
@@ -509,16 +796,16 @@ class SignBackend:
         return "401" in str(error)
 
     def load_saved_courses(self) -> bool:
-        """优先使用本地 auth.json 中保存的 Token，不启动浏览器。"""
+        """使用本地 Token，并通过已打开的 LMS 页面读取课程。"""
         if not self.token:
             self._log("本地没有可用的登录缓存。", "muted")
             if not self._relogin_with_account():
                 return False
-        self._log("正在使用本地保存的登录信息读取课程列表…", "info")
+        self._log("正在通过浏览器使用本地登录信息读取课程列表…", "info")
         try:
             self.courses = self._fetch_courses()
         except Exception as error:
-            self._log(f"本地登录信息已失效：{error}", "warn")
+            self._log(f"浏览器课程请求失败：{error}", "warn")
             if not self._is_unauthorized(error) or not self._relogin_with_account():
                 return False
             try:
@@ -707,14 +994,13 @@ class SignBackend:
                 self._log(f"读取浏览器登录信息失败：{error}", "warn")
             return False
         dgut = [item for item in cookies if "dgut.edu.cn" in item.get("domain", "")]
-        self.token = next((item.get("value", "") for item in dgut if item.get("name") == "AUTHORIZATION"), "")
-        user_id = next((item.get("value") for item in dgut if item.get("name") == "userid"), None)
+        self.token = self._browser_cookie(dgut, "AUTHORIZATION")
         if not self.token:
             if not automatic:
                 self._log("未检测到有效登录状态，请在浏览器中完成优学院登录。", "warn")
             return False
         self.headers["Authorization"] = self.token
-        self.user_id = int(user_id) if user_id and user_id.isdigit() else None
+        self.user_id = self._browser_user_id(dgut)
         self._persist_credentials()
         self._log("登录信息读取成功，正在获取课程列表…", "success")
         try:
@@ -748,7 +1034,7 @@ class SignBackend:
             self.selected_course = course
         return course
 
-    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def _request(self, method: str, url: str, **kwargs) -> BrowserResponse:
         return self.api.request(method, url, **kwargs)
 
     def _classrooms(self, course_id: int) -> list[Classroom]:
@@ -825,16 +1111,16 @@ class SignBackend:
         self._write_sign_log(course.name, kind, [f"attendanceID: {activity_id}", f"HTTP/status: {status}", f"response: {message}"])
         return status in (200, 201)
 
-    def _poll_once(self, checked: set[str]) -> None:
+    def _poll_once(self, checked: set[str]) -> str:
         today = datetime.now().strftime("%m-%d")
         course = self.selected_course
         if course is None:
             self._log("尚未选择课程，轮询已跳过。", "warn")
-            return
+            return "尚未选择课程"
         classrooms = [item for item in self._classrooms(course.id) if today in item.title]
         if not classrooms:
             self._log(f"[{course.name}] 本轮完成：今天没有课堂，无需签到。", "muted")
-            return
+            return "今日暂无课堂"
         active_count = 0
         new_count = 0
         for classroom in classrooms:
@@ -851,8 +1137,26 @@ class SignBackend:
                     checked.add(key)
         if active_count == 0:
             self._log(f"[{course.name}] 本轮完成：未发现进行中的签到。", "muted")
+            return "未发现进行中的签到"
         elif new_count == 0:
             self._log(f"[{course.name}] 本轮完成：签到活动已处理，继续等待。", "muted")
+            return "签到活动已处理"
+        return f"已处理 {new_count} 个签到活动"
+
+    def sign_monitor_status(self) -> dict[str, Any]:
+        """返回供前端原地刷新的轻量状态，避免把每轮检查打印成日志。"""
+        with self.monitor_lock:
+            running = self.monitor_thread is not None and self.monitor_thread.is_alive()
+            return {
+                "running": running,
+                "state": self.monitor_state.value,
+                "courseName": self.selected_course.name if self.selected_course else "",
+                "intervalSeconds": self.monitor_interval,
+                "round": self.monitor_round,
+                "startedAt": self.monitor_started_at,
+                "lastCheck": self.monitor_last_check,
+                "lastResult": self.monitor_last_result,
+            }
 
     def start_monitor(self) -> bool:
         with self.monitor_lock:
@@ -861,6 +1165,11 @@ class SignBackend:
                 return False
             self.stop_event.clear()
             self.monitor_state = MonitorState.RUNNING
+            self.monitor_round = 0
+            self.monitor_interval = max(2, int(self.config.poll_interval))
+            self.monitor_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            self.monitor_last_check = ""
+            self.monitor_last_result = "等待首次检查"
             self.monitor_thread = threading.Thread(
                 target=self._monitor,
                 name="sign-monitor",
@@ -878,16 +1187,24 @@ class SignBackend:
     def _monitor(self) -> None:
         try:
             checked: set[str] = set()
-            interval = max(2, int(self.config.poll_interval))
+            interval = self.monitor_interval
             self._log(f"开始轮询，每 {interval} 秒检查一次。", "success")
             round_number = 0
             while not self.stop_event.is_set():
                 round_number += 1
                 try:
                     course_name = self.selected_course.name if self.selected_course else "未选择课程"
-                    self._log(f"[{time.strftime('%H:%M:%S')}] 第 {round_number} 轮：正在检查《{course_name}》…", "info")
-                    self._poll_once(checked)
+                    self._log(f"第 {round_number} 轮：正在检查《{course_name}》…", "info")
+                    result = self._poll_once(checked)
+                    with self.monitor_lock:
+                        self.monitor_round = round_number
+                        self.monitor_last_check = datetime.now().astimezone().isoformat(timespec="seconds")
+                        self.monitor_last_result = result
                 except Exception as error:
+                    with self.monitor_lock:
+                        self.monitor_round = round_number
+                        self.monitor_last_check = datetime.now().astimezone().isoformat(timespec="seconds")
+                        self.monitor_last_result = "检查失败"
                     self._log(f"轮询出错：{error}", "warn")
                 self.stop_event.wait(interval)
         finally:

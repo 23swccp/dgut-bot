@@ -282,6 +282,24 @@ class InjectScriptTests(unittest.TestCase):
 
 
 class ActionExecutorTests(unittest.TestCase):
+    @patch("dgutbot.course.yxy_course.random.uniform", return_value=0.0)
+    @patch("dgutbot.course.yxy_course.random.randint", return_value=4)
+    def test_natural_click_has_pointer_path_and_press_duration(self, _randint, _uniform):
+        calls = []
+        sleeps = []
+
+        def cdp_call(method, params, timeout=5.0):
+            calls.append((method, params))
+            return {}
+
+        executor = ActionExecutor(
+            cdp_call, Mock(), sleep=sleeps.append, natural_interactions=True,
+        )
+        self.assertTrue(executor.click_viewport_point(100, 200))
+        mouse = [params for method, params in calls if method == "Input.dispatchMouseEvent"]
+        self.assertEqual([item["type"] for item in mouse], ["mouseMoved"] * 4 + ["mousePressed", "mouseReleased"])
+        self.assertGreaterEqual(len(sleeps), 6)
+
     def test_cdp_click_uses_viewport_coordinates_and_order(self):
         calls = []
 
