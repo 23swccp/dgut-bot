@@ -19,6 +19,18 @@ type TocGroups = {
 };
 
 const FIRST_DEVELOPER_HEADING = "开发环境与本地运行";
+const GITHUB_HEADER_PATTERN = /<!-- github-readme-header:start -->[\s\S]*?<!-- github-readme-header:end -->/;
+const APP_MARKDOWN_HEADER = `![莞工小皮卡](./docs/dgut-bot-hero.png)
+
+# dgut-bot
+
+莞工小皮卡
+
+[![Python 3.10+](./docs/badges/python.svg)](https://www.python.org/) [![Windows](./docs/badges/windows.svg)](https://www.microsoft.com/windows/) [![v{{VERSION}}](./docs/badges/version.svg)]({{REPO_URL}}/releases) [![GitHub dgut-bot](./docs/badges/github.svg)]({{REPO_URL}})`;
+
+export function markdownForApp(source: string): string {
+  return source.replace(GITHUB_HEADER_PATTERN, APP_MARKDOWN_HEADER);
+}
 
 function plainMarkdown(text: string): string {
   return text
@@ -102,7 +114,7 @@ const markdownComponents: Components = {
 
 export function AboutGuide({ version, repo }: AboutGuideProps) {
   const repoUrl = repo ? `https://github.com/${repo}` : "https://github.com/23swccp/dgut-bot";
-  const source = useMemo(() => guideSource
+  const source = useMemo(() => markdownForApp(guideSource)
     .replace(/\{\{VERSION\}\}/g, version || "…")
     .replace(/\{\{REPO_URL\}\}/g, repoUrl), [repoUrl, version]);
   const tocGroups = useMemo(() => parseToc(source), [source]);

@@ -1,10 +1,16 @@
-![莞工小皮卡](./docs/dgut-bot-hero.png)
-
-# dgut-bot
-
-莞工小皮卡
-
-[![Python 3.10+](./docs/badges/python.svg)](https://www.python.org/) [![Windows](./docs/badges/windows.svg)](https://www.microsoft.com/windows/) [![v{{VERSION}}](./docs/badges/version.svg)]({{REPO_URL}}/releases) [![GitHub dgut-bot](./docs/badges/github.svg)]({{REPO_URL}})
+<!-- github-readme-header:start -->
+<p align="center">
+  <img src="./docs/dgut-bot-hero.png" width="340" alt="莞工小皮卡">
+</p>
+<p align="center">
+  <a href="https://www.python.org/"><img src="./docs/badges/python.svg" alt="Python 3.10+"></a>
+  <a href="https://www.microsoft.com/windows/"><img src="./docs/badges/windows.svg" alt="Windows"></a>
+  <a href="https://github.com/23swccp/dgut-bot/releases"><img src="./docs/badges/version.svg" alt="version"></a>
+  <a href="https://github.com/23swccp/dgut-bot"><img src="./docs/badges/github.svg" alt="GitHub dgut-bot"></a>
+</p>
+<h1 align="center">dgut-bot</h1>
+<p align="center">莞工小皮卡</p>
+<!-- github-readme-header:end -->
 
 **莞工小皮卡**是一款主要由 `Python` 编写的优学院辅助程序，能够自动处理课程签到和课件学习任务。仅支持 Windows 系统。
 
