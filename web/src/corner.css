@@ -301,6 +301,18 @@
   margin-top: 14px;
 }
 
+.module-nav .module-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.module-nav .module-icon {
+  flex: 0 0 auto;
+  width: 19px;
+  height: 19px;
+}
+
 .module-divider {
   height: 1px;
   margin: 14px 10px;

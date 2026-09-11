@@ -128,7 +128,7 @@ class BrowserLauncherTests(unittest.TestCase):
             self.assertEqual(browser_launcher.main(), 0)
             saved.assert_called_once_with(browser_name="Microsoft Edge", browser_path=str(executable.resolve()))
             service.assert_called_once_with(8765, True, 8765)
-            browser.assert_called_once_with("http://127.0.0.1:8765")
+            browser.assert_called_once_with("http://127.0.0.1:8765/(不要删favicon.ico页)")
             default.assert_not_called()
 
     def test_frozen_detected_browser_skips_manual_setup(self):

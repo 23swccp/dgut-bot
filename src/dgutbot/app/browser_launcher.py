@@ -29,7 +29,8 @@ from urllib.request import Request, urlopen
 from dgutbot.app.app_paths import data_root, frontend_dist, is_frozen, resource_root
 from dgutbot.app.browser_dialog import choose_browser_file
 from dgutbot.app.browser_paths import BROWSER_NAMES, resolve_browser_path
-from dgutbot.app.browser_lifetime import BrowserLifetime
+from dgutbot.app.browser_lifetime import BrowserLifetime, FRONTEND_DISPLAY_PATH
+from dgutbot.app.campus_startup import configure_campus_login_startup, open_campus_login
 from dgutbot.agent.agent_runtime import new_runtime, publish_runtime, remove_runtime
 from dgutbot.app.backend_commands import AGENT_SERVICE, backend, configure_agent_registry
 from dgutbot.app.web_server import (
@@ -434,6 +435,9 @@ def prepare_launcher_console() -> None:
 
 
 def main() -> int:
+    if "--campus-login" in sys.argv:
+        open_campus_login()
+        return 0
     if "--service" in sys.argv:
         index = sys.argv.index("--service")
         web_port = int(sys.argv[index + 1])
@@ -446,6 +450,12 @@ def main() -> int:
         show_notice_window(str(error))
         return 1
     log_line(LOG_PATH, "启动终端已就绪，开始检查浏览器配置。")
+    if backend.config.campus_login_on_startup:
+        try:
+            # 应用更新后刷新启动命令中的程序路径。
+            configure_campus_login_startup(True)
+        except OSError as error:
+            log_line(LOG_PATH, f"刷新校园网开机启动项失败：{error}")
     if app_mutex_exists():
         show_already_running_notice()
         return 0
@@ -475,6 +485,7 @@ def main() -> int:
             web_port = choose_frontend_port()
             api_port = choose_available_port(8765)
         web_url = f"http://127.0.0.1:{web_port}"
+        browser_url = f"{web_url}{FRONTEND_DISPLAY_PATH}"
         health_url = f"{web_url}/api/health"
 
         # 浏览器是网页界面的入口，必须先确认可用，再启动本地网页服务。
@@ -499,11 +510,11 @@ def main() -> int:
             service.wait(timeout=10)
             return 0
 
-        if backend.start_browser(web_url):
+        if backend.start_browser(browser_url):
             print("已在找到的浏览器中打开网页程序。")
         else:
             print("已保存的浏览器启动失败，请重新填写浏览器地址。")
-            if not prompt_for_browser("") or not backend.start_browser(web_url):
+            if not prompt_for_browser("") or not backend.start_browser(browser_url):
                 print("浏览器仍无法启动，程序已取消。")
                 request_service_shutdown(web_url)
                 return 0

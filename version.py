@@ -22,7 +22,7 @@ from dgutbot.app.app_paths import data_root, resource_root
 
 
 APP_NAME = "优学院助手"
-APP_VERSION = "0.3.7"
+APP_VERSION = "0.3.8"
 ROOT = Path(__file__).resolve().parent
 
 

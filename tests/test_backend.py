@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -212,11 +213,12 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(target["id"], "owned-1")
         connect.assert_called_once_with("ws://browser", timeout=10, enable_multithread=True)
         self.assertEqual([item["method"] for item in socket.sent], ["Storage.setCookies", "Target.createTarget"])
-        cookie = socket.sent[0]["params"]["cookies"][0]
-        self.assertEqual(cookie["name"], "AUTHORIZATION")
-        self.assertEqual(cookie["domain"], ".dgut.edu.cn")
-        self.assertTrue(cookie["secure"])
-        self.assertTrue(cookie["httpOnly"])
+        cookies = socket.sent[0]["params"]["cookies"]
+        self.assertEqual([cookie["name"] for cookie in cookies], ["AUTHORIZATION", "token"])
+        self.assertEqual({cookie["domain"] for cookie in cookies}, {".dgut.edu.cn"})
+        self.assertTrue(all(cookie["secure"] for cookie in cookies))
+        self.assertTrue(cookies[0]["httpOnly"])
+        self.assertFalse(cookies[1]["httpOnly"])
         self.assertIn("/json/close/owned-1", get.call_args_list[-1].args[0])
 
     def test_course_selection_accepts_one_exact_course_only(self):
@@ -285,6 +287,71 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(activity.score_type, 3)
         self.assertEqual(activity.raw["custom"], "kept")
 
+    def test_numeric_sign_submits_without_attendance_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.user_id = 7
+            activity = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 2, "state": 0, "status": 0,
+            })
+            request = Mock()
+            request.return_value.status_code = 200
+            request.return_value.text = '{"status":200,"msg":"ok"}'
+            request.return_value.json.return_value = {"status": 200, "msg": "ok"}
+            with patch.object(backend, "_direct_sign_request", request):
+                self.assertTrue(backend._sign(Course(1, "系统工程"), 22, activity))
+            self.assertEqual(request.call_args.args[0]["attendanceCode"], "")
+            log = (Path(directory) / "签到记录.md").read_text(encoding="utf-8")
+            self.assertIn("transport: direct-python", log)
+            self.assertIn("HTTP: 200", log)
+            self.assertIn('rawResponse: {"status":200,"msg":"ok"}', log)
+
+    def test_direct_sign_replays_verified_school_request_without_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.token = "verified-token"
+            backend.headers["Authorization"] = "verified-token"
+            payload = {"attendanceID": 11, "attendanceCode": ""}
+            response = Mock()
+            with patch("yxy_backend.requests.post", return_value=response) as post, patch.object(
+                backend.api, "request",
+            ) as browser_request:
+                self.assertIs(backend._direct_sign_request(payload), response)
+            browser_request.assert_not_called()
+            self.assertEqual(post.call_args.args[0], "https://application.dgut.edu.cn/classroomapi/newAttendance/signByStu")
+            self.assertEqual(post.call_args.kwargs["json"], payload)
+            self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "verified-token")
+            self.assertEqual(post.call_args.kwargs["cookies"]["AUTHORIZATION"], "verified-token")
+            self.assertEqual(post.call_args.kwargs["timeout"], 15)
+
+    def test_sign_treats_platform_already_involved_status_as_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.user_id = 7
+            activity = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 2, "state": 0, "status": 0,
+            })
+            response = Mock()
+            response.status_code = 200
+            response.text = '{"newStatus":0,"status":209}'
+            response.json.return_value = {"newStatus": 0, "status": 209}
+            with patch.object(backend, "_direct_sign_request", return_value=response):
+                self.assertTrue(backend._sign(Course(1, "系统工程"), 22, activity))
+
+    def test_poll_accepts_active_numeric_sign_with_zero_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.selected_course = Course(1, "系统工程")
+            classroom = type("ClassroomStub", (), {"id": 22, "title": datetime.now().strftime("%m-%d")})()
+            activity = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 2, "state": 0, "status": 0,
+            })
+            with patch.object(backend, "_classrooms", return_value=[classroom]), patch.object(
+                backend, "_activities", return_value=[activity],
+            ), patch.object(backend, "_sign", return_value=False) as sign:
+                self.assertEqual(backend._poll_once(set()), "已处理 1 个签到活动")
+            sign.assert_called_once()
+
     def test_browser_launch_uses_debug_mode_and_opens_requested_url(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -344,6 +411,30 @@ class BackendTests(unittest.TestCase):
                 self.assertTrue(backend.load_session_and_courses(wait_seconds=1, automatic=True))
             self.assertEqual(backend.token, "test-token")
             self.assertEqual(backend.user_id, 456)
+
+    def test_expired_browser_cookie_is_not_persisted_or_retried_automatically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messages = []
+            backend = SignBackend(lambda text, kind: messages.append((text, kind)), root=root)
+            cookies = [
+                {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "expired-token"},
+            ]
+            fetch = Mock(side_effect=RuntimeError("浏览器请求失败：TypeError"))
+            with (
+                patch.object(backend, "_get_ws_url", return_value="ws://test"),
+                patch.object(backend, "_cookies", return_value=cookies),
+                patch.object(backend, "_fetch_courses", fetch),
+            ):
+                self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+                self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(backend.token, "")
+            self.assertNotIn("Authorization", backend.headers)
+            self.assertFalse((root / "auth.json").exists())
+            self.assertFalse(any("登录信息读取成功" in text for text, _kind in messages))
+            self.assertFalse(any("已更新本地应用登录缓存" in text for text, _kind in messages))
 
     def test_browser_detection_reports_paths_and_prefers_edge(self):
         with tempfile.TemporaryDirectory() as directory:

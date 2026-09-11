@@ -1521,6 +1521,8 @@ class CourseController:
         self.emit = emit
         self._event_emitter = emit_event
         self.ws_url: str | None = None
+        self.preferred_ws_url: str | None = None
+        self.preferred_page_id: str = ""
         self.ws = None
         self._msg_id = 0
         self._lock = threading.Lock()
@@ -1647,6 +1649,9 @@ class CourseController:
         return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
     def find_course_tab(self, port: int = 9222) -> str | None:
+        if self.preferred_ws_url:
+            selected, self.preferred_ws_url = self.preferred_ws_url, None
+            return selected
         try:
             targets = requests.get(f"http://127.0.0.1:{port}/json", timeout=3).json()
         except (requests.RequestException, ValueError):
@@ -3084,10 +3089,14 @@ class CourseController:
             # 因仍处于 ATTACHING 而被状态机忽略。
             self.state_machine.transition(CourseState.LOADING)
             bootstrap_state = self._read_bootstrap_state()
-            start_state = self._return_to_course_start(bootstrap_state)
+            preferred_page_id, self.preferred_page_id = self.preferred_page_id, ""
+            if preferred_page_id:
+                start_state = bootstrap_state if preferred_page_id == "*" or str((bootstrap_state or {}).get("page") or "") == preferred_page_id else None
+            else:
+                start_state = self._return_to_course_start(bootstrap_state)
             if start_state is None:
                 self.state_machine.fail()
-                self.emit("[刷课] 无法确认已返回课程开头，未启动刷课。", "warn")
+                self.emit("[刷课] 无法确认目标课件页面，未启动刷课。", "warn")
                 self.stop()
                 return False
             bootstrap_state = start_state

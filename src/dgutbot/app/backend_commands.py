@@ -12,6 +12,7 @@ from dgutbot.agent.agent_protocol import AgentError
 from dgutbot.agent.agent_tools import build_registry
 from dgutbot.agent.agent_service import AgentService
 from dgutbot.app.app_paths import data_root
+from dgutbot.app.campus_startup import configure_campus_login_startup
 from dgutbot.domain.yxy_backend import SignBackend
 from dgutbot.app.velopack_updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
@@ -308,6 +309,30 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": str(error)}
     if command == "get_course_helper_status":
         return {"ok": True, "status": backend.course_helper_status()}
+    if command == "start_course_scan":
+        return {"ok": True, "scan": backend.start_course_scan(force=bool(payload.get("force")))}
+    if command == "cancel_course_scan":
+        return {"ok": True, "scan": backend.cancel_course_scan()}
+    if command == "get_course_scan_status":
+        return {"ok": True, "scan": backend.course_scan_status()}
+    if command == "open_scanned_course":
+        item_id = str(payload.get("itemId") or "")
+        if not item_id:
+            return {"ok": False, "error": "缺少课件标识"}
+        if backend.course_helper_status().get("running"):
+            return {"ok": False, "error": "已有刷课任务正在运行，请先停止当前任务"}
+        if backend.course_scan_status().get("openPhase") in {"opening", "waiting_page", "validating", "connected", "starting"}:
+            return {"ok": False, "error": "正在打开所选课件，请勿重复点击"}
+
+        def open_and_start() -> None:
+            backend.auto_open_course(
+                item_id,
+                lambda: bool(handle("start_course_helper", {}).get("ok")),
+            )
+
+        backend.course_scan.set_open_state("opening", selected_id=item_id)
+        threading.Thread(target=open_and_start, name="auto-open-course", daemon=True).start()
+        return {"ok": True, "scan": backend.course_scan_status()}
     if command == "get_settings":
         return {"ok": True, "config": backend.config.to_mapping()}
     if command == "detect_browsers":
@@ -322,9 +347,13 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return {"ok": ok, "account": backend.account_login_status()}
     if command == "update_settings":
+        previous_campus_startup = backend.config.campus_login_on_startup
         try:
             backend.update_settings(**payload)
-        except ValueError as error:
+            configure_campus_login_startup(backend.config.campus_login_on_startup)
+        except (OSError, ValueError) as error:
+            if backend.config.campus_login_on_startup != previous_campus_startup:
+                backend.update_settings(campus_login_on_startup=previous_campus_startup)
             return {"ok": False, "error": str(error)}
         return {"ok": True, "config": backend.config.to_mapping()}
     if command == "open_log":

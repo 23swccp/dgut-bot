@@ -16,7 +16,7 @@ from enum import Enum
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 import requests
 from websocket import create_connection
@@ -24,6 +24,9 @@ from websocket import create_connection
 from dgutbot.app.browser_paths import (
     BROWSER_INSTALLATIONS, browser_scan_roots, extra_browser_candidates,
     normalize_browser_path, resolve_browser_path, scan_browser_directory,
+)
+from dgutbot.domain.course_scan import (
+    AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
 
 
@@ -42,6 +45,7 @@ class AppConfig:
     lat: float = 23.0432
     lng: float = 113.3993
     address: str = "东莞理工学院"
+    campus_login_on_startup: bool = False
     # 课件学习辅助：播放、文档阅读、章节衔接与测验自动作答（实验性，占位选项）。
     course_playback_rate: float = 8.0
     course_auto_dismiss_dialog: bool = True
@@ -89,6 +93,9 @@ class AppConfig:
             debug_port=cls._number(merged["debug_port"], defaults.debug_port, 1024, 65535, integer=True),
             poll_interval=cls._number(merged["poll_interval"], defaults.poll_interval, 2, 3600, integer=True),
             save_log=cls._boolean(merged["save_log"], defaults.save_log),
+            campus_login_on_startup=cls._boolean(
+                merged["campus_login_on_startup"], defaults.campus_login_on_startup,
+            ),
             lat=cls._number(merged["lat"], defaults.lat, -90, 90),
             lng=cls._number(merged["lng"], defaults.lng, -180, 180),
             course_playback_rate=cls._number(merged["course_playback_rate"], defaults.course_playback_rate, 1, 16),
@@ -188,7 +195,7 @@ class BrowserApiClient:
     """在与目标接口同源的页面内执行 fetch，复用 Chromium 网络栈与会话。"""
 
     LMS_ORIGIN = "https://lms.dgut.edu.cn"
-    ALLOWED_ORIGINS = frozenset({LMS_ORIGIN, "https://application.dgut.edu.cn"})
+    ALLOWED_ORIGINS = frozenset({LMS_ORIGIN, "https://application.dgut.edu.cn", "https://ua.dgut.edu.cn"})
     _FETCH_FUNCTION = r"""
 async function(request) {
   const controller = new AbortController();
@@ -290,14 +297,17 @@ async function(request) {
 
                 authorization = str(self._headers.get("Authorization") or "")
                 if authorization:
-                    browser_call("Storage.setCookies", {"cookies": [{
-                        "name": "AUTHORIZATION",
-                        "value": authorization,
-                        "domain": ".dgut.edu.cn",
-                        "path": "/",
-                        "secure": True,
-                        "httpOnly": True,
-                    }]})
+                    browser_call("Storage.setCookies", {"cookies": [
+                        {
+                            "name": "AUTHORIZATION", "value": authorization,
+                            "domain": ".dgut.edu.cn", "path": "/", "secure": True, "httpOnly": True,
+                        },
+                        {
+                            # learnCourse 的旧版前端通过 document.cookie 读取 token。
+                            "name": "token", "value": authorization,
+                            "domain": ".dgut.edu.cn", "path": "/", "secure": True, "httpOnly": False,
+                        },
+                    ]})
                 result = browser_call(
                     "Target.createTarget",
                     {"url": f"{origin}/favicon.ico", "background": True},
@@ -503,12 +513,19 @@ class SignBackend:
         self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         if self.token:
             self.headers["Authorization"] = self.token
+        self._rejected_browser_token = ""
         self.api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
         self._course_controller = None
         self._course_operation_lock = threading.RLock()
         self._course_reservation_lock = threading.Lock()
         self._course_reservation = None
         self._course_starting = False
+        self.course_scan = CourseScanService(
+            lambda: list(self.courses), self._scan_course_directory,
+            lambda: bool(self.token and self.courses), self._redact,
+        )
+        self._auto_course_lock = threading.Lock()
+        self._auto_course_generation = 0
 
     def _load_config(self) -> AppConfig:
         values: dict = {}
@@ -631,6 +648,133 @@ class SignBackend:
         raw_courses = data.get("courseList") or data.get("result", {}).get("courseList", [])
         return [Course.from_api(course) for course in raw_courses]
 
+    @staticmethod
+    def _directory_tree_present(value: Any) -> bool:
+        tree_names = {"chapters", "chapterlist", "sections", "sectionlist", "pages", "pagelist", "contenttree", "directory", "catalog", "outline"}
+        if isinstance(value, dict):
+            return any(
+                (str(key).lower() in tree_names and isinstance(child, (dict, list)))
+                or (isinstance(child, (dict, list)) and SignBackend._directory_tree_present(child))
+                for key, child in value.items()
+            )
+        if isinstance(value, list):
+            return any(SignBackend._directory_tree_present(child) for child in value)
+        return False
+
+    @classmethod
+    def _directory_urls(cls, value: Any) -> list[str]:
+        """仅提取平台响应明确给出的目录 URL，不在客户端拼接接口路径。"""
+        found: list[str] = []
+        if isinstance(value, dict):
+            for key, child in value.items():
+                lowered = str(key).lower()
+                if isinstance(child, str) and any(word in lowered for word in ("catalog", "directory", "outline", "chapter", "content", "progress")):
+                    try:
+                        parts = urlsplit(child)
+                    except ValueError:
+                        parts = None
+                    if parts and f"{parts.scheme}://{parts.netloc}" in BrowserApiClient.ALLOWED_ORIGINS:
+                        found.append(child)
+                elif isinstance(child, (dict, list)):
+                    found.extend(cls._directory_urls(child))
+        elif isinstance(value, list):
+            for child in value:
+                found.extend(cls._directory_urls(child))
+        return list(dict.fromkeys(found))
+
+    def _scan_course_directory(self, course: Course) -> Any:
+        """每个扫描 worker 使用独立 CDP 会话，避免共享请求桥把线程池串行化。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            return self._course_directory_payload(course, api=api)
+        finally:
+            api.close()
+
+    @staticmethod
+    def _directory_json(api: BrowserApiClient, url: str, *, params: dict[str, Any] | None = None) -> Any:
+        """目录请求先快速失败；仅对浏览器超时做一次更短的瞬时重试。"""
+        try:
+            return api.request("GET", url, params=params, timeout=12).json()
+        except RuntimeError as error:
+            if "AbortError" not in str(error):
+                raise
+            return api.request("GET", url, params=params, timeout=8).json()
+
+    def _course_directory_payload(self, course: Course, *, api: BrowserApiClient | None = None) -> Any:
+        """读取 2026-09-10 实页采样验证的教材目录，并标准化为解析器输入。"""
+        request_api = api or self.api
+        try:
+            textbook_response = self._directory_json(
+                request_api, f"{LMS_BASE}/textbook/student/{course.id}/list", params={"lang": "zh"},
+            )
+            textbooks = textbook_response if isinstance(textbook_response, list) else textbook_response.get("result", [])
+            class_response = self._directory_json(
+                request_api, f"{LMS_BASE}/classes/information/student/{course.id}", params={"lang": "zh"},
+            )
+            class_info = class_response.get("result", class_response) if isinstance(class_response, dict) else {}
+            class_id = str(class_info.get("classId") or "")
+            normalized: list[dict[str, Any]] = []
+            for textbook in textbooks if isinstance(textbooks, list) else []:
+                if not isinstance(textbook, dict) or not textbook.get("courseId"):
+                    continue
+                textbook_id = str(textbook["courseId"])
+                info_response = self._directory_json(
+                    request_api, f"{LMS_BASE}/textbook/student/information",
+                    params={"currentPlatformType": 1, "lang": "zh", "ocId": course.id, "textbookId": textbook_id},
+                )
+                info = info_response.get("result", info_response) if isinstance(info_response, dict) else {}
+                entries = info.get("list", []) if isinstance(info, dict) else []
+                for entry in entries if isinstance(entries, list) else []:
+                    if not isinstance(entry, dict):
+                        continue
+                    plan = entry.get("planState") if isinstance(entry.get("planState"), dict) else {}
+                    if entry.get("hide") not in (None, 0, "0") or plan.get("unitHide") not in (None, 0, "0") or plan.get("activityAutoHide") not in (None, 0, "0"):
+                        continue
+                    if plan.get("studyState") not in (None, 1, "1"):
+                        continue
+                    chapter_id = str(entry.get("currentUnitID") or "")
+                    if not chapter_id or not class_id:
+                        continue
+                    return_url = f"https://lms.dgut.edu.cn/courseweb/ulearning/index.html#/course/textbook?courseId={course.id}"
+                    learn_url = "https://ua.dgut.edu.cn/learnCourse/learnCourse.html?" + urlencode({
+                        "courseId": textbook_id, "chapterId": chapter_id,
+                        "classId": class_id, "returnUrl": return_url,
+                    })
+                    normalized.append({
+                        **entry, "courseId": textbook_id, "classId": class_id,
+                        "chapterId": chapter_id, "url": learn_url,
+                        "name": entry.get("currentUnit") or entry.get("currentActivity") or "未命名课件",
+                        "contentType": "课件",
+                    })
+            return {"pages": normalized}
+        except Exception as error:
+            if self._is_login_rejected(error):
+                raise AuthRequiredError("登录已失效") from error
+            verified_error = error
+        if self._directory_tree_present(course.raw):
+            return course.raw
+        for url in self._directory_urls(course.raw):
+            try:
+                payload = self._directory_json(request_api, url)
+            except Exception as error:
+                if self._is_login_rejected(error):
+                    raise AuthRequiredError("登录已失效") from error
+                continue
+            if isinstance(payload, (dict, list)):
+                return payload
+        raise DirectorySampleRequired(f"已验证的教材目录读取失败：{self._redact(verified_error)}")
+
+    def start_course_scan(self, *, force: bool = False) -> dict:
+        if not self.courses and self.token:
+            self.load_saved_courses()
+        return self.course_scan.start(force=force)
+
+    def cancel_course_scan(self) -> dict:
+        return self.course_scan.cancel()
+
+    def course_scan_status(self) -> dict:
+        return self.course_scan.snapshot()
+
     def _log(self, text: str, kind: str = "muted") -> None:
         self.emit(text, kind)
 
@@ -695,7 +839,142 @@ class SignBackend:
     def stop_course_helper(self) -> None:
         """停止课程页控制器，不关闭用户的浏览器标签页。"""
         with self._course_operation_lock:
+            self._auto_course_generation += 1
             self.course_controller.stop()
+            self.course_scan.reset_open_state()
+
+    @staticmethod
+    def _target_identifiers(url: str, state: dict[str, Any]) -> set[str]:
+        values: set[str] = set()
+        try:
+            for entries in parse_qs(urlsplit(url).query).values():
+                values.update(str(item) for item in entries if item)
+        except ValueError:
+            pass
+        for key in ("courseId", "classId", "chapterId", "nodeId", "pageId", "course", "page"):
+            value = state.get(key)
+            if value not in (None, ""):
+                values.add(str(value))
+        return values
+
+    def _navigate_course_target(self, item: dict[str, Any], generation: int, timeout: float = 25.0) -> str:
+        url = str(item.get("url") or "")
+        parts = urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != "ua.dgut.edu.cn" or "/learnCourse" not in parts.path:
+            raise RuntimeError("所选条目没有可验证的真实课件地址")
+        self.course_scan.set_open_state("opening", selected_id=item["id"])
+        try:
+            targets = self.api._list_targets()
+        except RuntimeError:
+            if not self.start_browser("https://ua.dgut.edu.cn"):
+                raise RuntimeError("无法启动程序管理的浏览器")
+            deadline = time.monotonic() + 8
+            targets = []
+            while time.monotonic() < deadline and not targets:
+                try:
+                    targets = self.api._list_targets()
+                except RuntimeError:
+                    time.sleep(0.2)
+        target = next((entry for entry in targets if entry.get("type") == "page" and "ua.dgut.edu.cn/learnCourse" in str(entry.get("url") or "")), None)
+        if target is None:
+            self._open_debug_tab(url)
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                target = next((entry for entry in self.api._list_targets() if entry.get("type") == "page" and str(entry.get("url") or "") == url), None)
+                if target:
+                    break
+                time.sleep(0.15)
+        if not target or not target.get("webSocketDebuggerUrl"):
+            raise RuntimeError("创建课件标签页超时")
+        ws = create_connection(str(target["webSocketDebuggerUrl"]), timeout=10, enable_multithread=True)
+        message_id = 0
+        try:
+            def call(method: str, params: dict, call_timeout: float = 10) -> dict:
+                nonlocal message_id
+                message_id += 1
+                ws.settimeout(call_timeout)
+                ws.send(json.dumps({"id": message_id, "method": method, "params": params}))
+                while True:
+                    result = json.loads(ws.recv())
+                    if result.get("id") == message_id:
+                        if result.get("error"):
+                            raise RuntimeError("浏览器拒绝打开所选课件")
+                        return result.get("result") or {}
+            self.course_scan.set_open_state("waiting_page")
+            call("Page.enable", {})
+            if self.token:
+                for cookie in (
+                    {"name": "AUTHORIZATION", "httpOnly": True},
+                    {"name": "token", "httpOnly": False},
+                ):
+                    cookie_result = call("Network.setCookie", {
+                        **cookie, "value": self.token, "domain": ".dgut.edu.cn",
+                        "path": "/", "secure": True,
+                    })
+                    if cookie_result.get("success") is False:
+                        raise RuntimeError("浏览器未能恢复学校页面登录状态")
+            call("Page.navigate", {"url": url})
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if generation != self._auto_course_generation:
+                    raise RuntimeError("用户已停止自动启动")
+                self.course_scan.set_open_state("validating")
+                expression = """(function(){try{var o=function(v){return typeof v==='function'?v():v};var r=window.koLearnCourseViewModel;var c=r&&o(r.course),p=r&&o(r.currentPage);return {ready:!!(r&&p),url:location.href,courseId:String(c&&o(c.id)||''),classId:String(c&&o(c.classId)||''),pageId:String(p&&o(p.id)||''),course:String(c&&o(c.id)||''),page:String(p&&o(p.id)||'')};}catch(e){return {ready:false,url:location.href}}})()"""
+                response = call("Runtime.evaluate", {"expression": expression, "returnByValue": True}, 5)
+                state = ((response.get("result") or {}).get("value") or {})
+                current_url = str(state.get("url") or "")
+                if urlsplit(current_url).hostname not in {"ua.dgut.edu.cn"}:
+                    if "login" in current_url.lower():
+                        raise AuthRequiredError("登录已失效")
+                if state.get("ready"):
+                    expected = {str(item[key]) for key in ("courseId", "classId", "chapterId", "pageId") if item.get(key)}
+                    actual = self._target_identifiers(current_url, state)
+                    if expected and not expected.issubset(actual):
+                        raise RuntimeError("页面与所选课件不匹配，未启动刷课")
+                    return str(target["webSocketDebuggerUrl"])
+                time.sleep(0.25)
+        finally:
+            ws.close()
+        raise RuntimeError("课件页面加载超时")
+
+    def auto_open_course(self, item_id: str, start: Callable[[], bool]) -> bool:
+        """后台打开并校验一个条目；互斥与代际号阻止重复启动和停止后复活。"""
+        if not self._auto_course_lock.acquire(blocking=False):
+            return False
+        try:
+            if self._course_controller and self._course_controller._running:
+                raise RuntimeError("已有刷课任务正在运行，请先停止当前任务")
+            item = self.course_scan.item(item_id)
+            if not item:
+                raise RuntimeError("所选课件已不在当前扫描结果中，请刷新后重试")
+            if not item.get("canAutoOpen"):
+                raise RuntimeError(str(item.get("unavailableReason") or "该课件不能自动打开"))
+            self._auto_course_generation += 1
+            generation = self._auto_course_generation
+            ws_url = self._navigate_course_target(item, generation)
+            self.course_scan.set_open_state("connected")
+            self.course_controller.preferred_ws_url = ws_url
+            self.course_controller.preferred_page_id = str(item.get("pageId") or "*")
+            if generation != self._auto_course_generation:
+                raise RuntimeError("用户已停止自动启动")
+            self.course_scan.set_open_state("starting")
+            if not start():
+                raise RuntimeError("课件已打开，但现有刷课控制器启动失败")
+            self.course_scan.set_open_state("started")
+            return True
+        except AuthRequiredError as error:
+            self._discard_credentials()
+            self.course_scan.set_open_state("auth_required", selected_id=item_id, error=str(error))
+            return False
+        except Exception as error:
+            if "用户已停止自动启动" in str(error):
+                self.course_scan.reset_open_state()
+                return False
+            phase = "timeout" if "超时" in str(error) else "failed"
+            self.course_scan.set_open_state(phase, selected_id=item_id, error=str(error))
+            return False
+        finally:
+            self._auto_course_lock.release()
 
     def set_course_speed(self, rate: float) -> None:
         """在运行中调整视频播放倍速。"""
@@ -723,6 +1002,16 @@ class SignBackend:
         self.user_id = user_id
         self.headers["Authorization"] = token
         self._persist_credentials()
+
+    def _discard_credentials(self) -> None:
+        """丢弃已被服务端或登录跳转拒绝的缓存，不再把它当作候选身份。"""
+        self.token = ""
+        self.user_id = None
+        self.headers.pop("Authorization", None)
+        try:
+            (self.root / "auth.json").unlink(missing_ok=True)
+        except OSError:
+            pass
 
     @staticmethod
     def _cookie_value(response: requests.Response, name: str) -> str:
@@ -795,6 +1084,11 @@ class SignBackend:
     def _is_unauthorized(error: Exception) -> bool:
         return "401" in str(error)
 
+    @classmethod
+    def _is_login_rejected(cls, error: Exception) -> bool:
+        # fetch 遇到登录重定向且 redirect='error' 时，Chromium 只返回 TypeError。
+        return cls._is_unauthorized(error) or "TypeError" in str(error)
+
     def load_saved_courses(self) -> bool:
         """使用本地 Token，并通过已打开的 LMS 页面读取课程。"""
         if not self.token:
@@ -806,6 +1100,8 @@ class SignBackend:
             self.courses = self._fetch_courses()
         except Exception as error:
             self._log(f"浏览器课程请求失败：{error}", "warn")
+            if self._is_login_rejected(error):
+                self._discard_credentials()
             if not self._is_unauthorized(error) or not self._relogin_with_account():
                 return False
             try:
@@ -994,23 +1290,47 @@ class SignBackend:
                 self._log(f"读取浏览器登录信息失败：{error}", "warn")
             return False
         dgut = [item for item in cookies if "dgut.edu.cn" in item.get("domain", "")]
-        self.token = self._browser_cookie(dgut, "AUTHORIZATION")
-        if not self.token:
+        candidate_token = self._browser_cookie(dgut, "AUTHORIZATION")
+        if not candidate_token:
             if not automatic:
                 self._log("未检测到有效登录状态，请在浏览器中完成优学院登录。", "warn")
             return False
-        self.headers["Authorization"] = self.token
-        self.user_id = self._browser_user_id(dgut)
-        self._persist_credentials()
-        self._log("登录信息读取成功，正在获取课程列表…", "success")
+        if automatic and candidate_token == self._rejected_browser_token:
+            return False
+
+        previous_token, previous_user_id = self.token, self.user_id
+        previous_authorization = self.headers.get("Authorization")
+        self.headers["Authorization"] = candidate_token
         try:
-            self.courses = self._fetch_courses()
+            courses = self._fetch_courses()
         except Exception as error:
-            self._log(f"获取课程列表失败：{error}", "warn")
+            if self._is_login_rejected(error):
+                self._rejected_browser_token = candidate_token
+                self._discard_credentials()
+            else:
+                self.token, self.user_id = previous_token, previous_user_id
+                if previous_authorization:
+                    self.headers["Authorization"] = previous_authorization
+                else:
+                    self.headers.pop("Authorization", None)
+            if not automatic:
+                self._log(f"获取课程列表失败：{error}", "warn")
             return False
-        if not self.courses:
-            self._log("没有读取到课程，请确认登录账号与网络状态。", "warn")
+        if not courses:
+            self.token, self.user_id = previous_token, previous_user_id
+            if previous_authorization:
+                self.headers["Authorization"] = previous_authorization
+            else:
+                self.headers.pop("Authorization", None)
+            if not automatic:
+                self._log("没有读取到课程，请确认登录账号与网络状态。", "warn")
             return False
+        self.token = candidate_token
+        self.user_id = self._browser_user_id(dgut)
+        self.courses = courses
+        self._rejected_browser_token = ""
+        self._persist_credentials()
+        self._log("登录信息验证成功，课程列表读取完成。", "success")
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         return True
 
@@ -1081,6 +1401,31 @@ class SignBackend:
             text = re.sub(pattern, lambda match: f"{match.group(1)}{match.group(2) if match.lastindex and match.lastindex >= 3 else ''}[已隐藏]", text)
         return text
 
+    def _direct_sign_request(self, payload: dict) -> requests.Response:
+        """复刻 2026-06-17 已验证的一次性脚本，直接提交签到请求。"""
+        token = str(self.headers.get("Authorization") or self.token or "").strip()
+        if not token:
+            raise RuntimeError("缺少 Authorization，无法直接提交签到")
+        headers = {
+            "User-Agent": self.headers.get("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json;charset=UTF-8",
+            "Origin": "https://lms.dgut.edu.cn",
+            "Referer": "https://lms.dgut.edu.cn/classroom/student.html",
+            "X-Requested-With": "XMLHttpRequest",
+            "Authorization": token,
+        }
+        # 旧脚本同时携带 Authorization 请求头与同名 Cookie。保留这一行为，
+        # 避免学校网关在不同节点采用不同的认证读取方式。
+        cookies = {"AUTHORIZATION": token, "token": token}
+        return requests.post(
+            f"{APP_BASE}/newAttendance/signByStu",
+            json=payload,
+            headers=headers,
+            cookies=cookies,
+            timeout=15,
+        )
+
     def _sign(self, course: Course, classroom_id: int, activity: Activity) -> bool:
         score_type = activity.score_type
         kind = self._kind(score_type)
@@ -1096,20 +1441,38 @@ class SignBackend:
             self._write_sign_log(course.name, kind, [f"attendanceID: {activity_id}", "result: skipped", "reason: unsupported scoreType"])
             return True
         payload = {"attendanceID": activity_id, "classID": classroom_id, "userID": self.user_id, "location": f"{self.config.lat},{self.config.lng}", "address": self.config.address, "enterWay": 1, "attendanceCode": code}
+        http_status: int | str = "exception"
+        raw_response = ""
         try:
-            response = self._request("POST", f"{APP_BASE}/newAttendance/signByStu", json=payload)
-            result = response.json()
-            status, message = result.get("status"), result.get("msg", result)
+            response = self._direct_sign_request(payload)
+            http_status = response.status_code
+            raw_response = response.text
+            try:
+                result = response.json()
+            except (requests.JSONDecodeError, ValueError):
+                result = {}
+            status = result.get("status")
+            if isinstance(status, str) and status.isdigit():
+                status = int(status)
+            message = result.get("msg", result.get("message", raw_response or f"HTTP {http_status}"))
         except Exception as error:
             status, message = "exception", str(error)
+            raw_response = str(error)
         if status == 200:
             self._log(f"✓ [{course.name}] {kind}：签到成功", "success")
-        elif status == 201:
+        elif status in (201, 209):
             self._log(f"• [{course.name}] {kind}：已签到过", "muted")
         else:
             self._log(f"× [{course.name}] {kind}：{message}", "warn")
-        self._write_sign_log(course.name, kind, [f"attendanceID: {activity_id}", f"HTTP/status: {status}", f"response: {message}"])
-        return status in (200, 201)
+        self._write_sign_log(course.name, kind, [
+            "transport: direct-python",
+            f"endpoint: {APP_BASE}/newAttendance/signByStu",
+            f"request: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
+            f"HTTP: {http_status}",
+            f"serviceStatus: {status}",
+            f"rawResponse: {raw_response}",
+        ])
+        return status in (200, 201, 209)
 
     def _poll_once(self, checked: set[str]) -> str:
         today = datetime.now().strftime("%m-%d")
@@ -1125,7 +1488,9 @@ class SignBackend:
         new_count = 0
         for classroom in classrooms:
             for activity in self._activities(classroom.id):
-                if activity.relation_type != 1 or activity.state != 1 or activity.status != 0:
+                # 学校接口目前会把已开始的数字码签到返回为 state=0；旧数据中
+                # 也存在 state=1。status=0 才是仍可处理的关键条件。
+                if activity.relation_type != 1 or activity.state not in (0, 1) or activity.status != 0:
                     continue
                 active_count += 1
                 key = f"{activity.relation_id}_{classroom.id}"

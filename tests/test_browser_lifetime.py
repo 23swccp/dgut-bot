@@ -48,6 +48,8 @@ class BrowserLifetimeTests(unittest.TestCase):
             ('http://127.0.0.1:1420/', 'page', True),
             ('http://localhost:1420/index.html', 'page', True),
             ('http://127.0.0.1:1420/ai.html', 'page', True),
+            ('http://127.0.0.1:1420/(不要删favicon.ico页)', 'page', True),
+            ('http://127.0.0.1:1420/%28%E4%B8%8D%E8%A6%81%E5%88%A0favicon.ico%E9%A1%B5%29', 'page', True),
             ('http://127.0.0.1:1421/', 'page', False),
             ('http://127.0.0.1:1420/api/health', 'page', False),
             ('http://127.0.0.1.evil.example:1420/', 'page', False),

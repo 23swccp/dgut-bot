@@ -2,8 +2,11 @@
 
 import json
 import time
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from urllib.request import ProxyHandler, build_opener
+
+
+FRONTEND_DISPLAY_PATH = "/(不要删favicon.ico页)"
 
 
 class BrowserLifetime:
@@ -26,7 +29,8 @@ class BrowserLifetime:
                     continue
                 url = urlsplit(str(target.get("url") or ""))
                 if (url.scheme == "http" and url.hostname in {"127.0.0.1", "localhost"}
-                        and url.port == self.web_port and url.path in {"", "/", "/index.html", "/ai.html"}):
+                        and url.port == self.web_port
+                        and unquote(url.path) in {"", "/", "/index.html", "/ai.html", FRONTEND_DISPLAY_PATH}):
                     return True
             return False
         except (OSError, ValueError):
