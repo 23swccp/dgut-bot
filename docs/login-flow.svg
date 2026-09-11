@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title description">
+  <title id="title">莞工小皮卡登录流程</title>
+  <desc id="description">程序启动后自动读取登录缓存并检查调试浏览器会话。会话和学校页面可用时通过浏览器读取课程；不可用时自动打开登录页，并在登录完成后显示课程列表。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#68707d"/>
+    </marker>
+    <style>
+      .node { fill: #fff; stroke: #c9cdd3; stroke-width: 2; }
+      .decision { fill: #f7f8fa; stroke: #9da4ae; stroke-width: 2; }
+      .result { fill: #f4f8fa; stroke: #18709a; stroke-width: 2; }
+      .line { fill: none; stroke: #68707d; stroke-width: 2; marker-end: url(#arrow); }
+      .label { fill: #29292c; font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; font-size: 20px; text-anchor: middle; dominant-baseline: middle; }
+      .branch { fill: #68707d; font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; font-size: 17px; font-weight: 600; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="960" height="520" fill="#fff"/>
+
+  <rect class="node" x="340" y="24" width="280" height="58" rx="8"/>
+  <text class="label" x="480" y="54">启动莞工小皮卡</text>
+
+  <path class="line" d="M 480 82 L 480 112"/>
+  <rect class="node" x="320" y="114" width="320" height="58" rx="8"/>
+  <text class="label" x="480" y="144">自动读取本地登录缓存</text>
+
+  <path class="line" d="M 480 172 L 480 202"/>
+  <path class="decision" d="M 480 202 L 610 262 L 480 322 L 350 262 Z"/>
+  <text class="label" x="480" y="262">浏览器会话可用？</text>
+
+  <path class="line" d="M 350 262 L 205 262 L 205 350"/>
+  <text class="branch" x="282" y="246">有效</text>
+  <rect class="node" x="65" y="352" width="280" height="58" rx="8"/>
+  <text class="label" x="205" y="382">通过浏览器读取课程</text>
+
+  <path class="line" d="M 610 262 L 755 262 L 755 350"/>
+  <text class="branch" x="678" y="246">失效</text>
+  <rect class="node" x="615" y="352" width="280" height="58" rx="8"/>
+  <text class="label" x="755" y="372">自动打开登录页</text>
+  <text class="label" x="755" y="394" style="font-size:16px; fill:#68707d">完成登录后自动检测新 Token</text>
+
+  <path class="line" d="M 205 410 L 205 468 L 372 468"/>
+  <path class="line" d="M 755 410 L 755 468 L 588 468"/>
+  <rect class="result" x="372" y="438" width="216" height="58" rx="8"/>
+  <text class="label" x="480" y="468">显示课程列表</text>
+</svg>

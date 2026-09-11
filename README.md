@@ -1,10 +1,10 @@
-![莞工小皮卡](/docs/dgut-bot-hero.png)
+![莞工小皮卡](./docs/dgut-bot-hero.png)
 
 # dgut-bot
 
 莞工小皮卡
 
-[![Python 3.10+](/docs/badges/python.svg)](https://www.python.org/) [![Windows](/docs/badges/windows.svg)](https://www.microsoft.com/windows/) [![v{{VERSION}}](/docs/badges/version.svg)]({{REPO_URL}}/releases) [![GitHub dgut-bot](/docs/badges/github.svg)]({{REPO_URL}})
+[![Python 3.10+](./docs/badges/python.svg)](https://www.python.org/) [![Windows](./docs/badges/windows.svg)](https://www.microsoft.com/windows/) [![v{{VERSION}}](./docs/badges/version.svg)]({{REPO_URL}}/releases) [![GitHub dgut-bot](./docs/badges/github.svg)]({{REPO_URL}})
 
 **莞工小皮卡**是一款主要由 `Python` 编写的优学院辅助程序，能够自动处理课程签到和课件学习任务。仅支持 Windows 系统。
 
@@ -27,7 +27,7 @@
 
 课程列表由 `lms.dgut.edu.cn` 页面发出，课堂、活动和签到请求由 `application.dgut.edu.cn` 页面发出。程序会自动选择与接口同源的标签页，以复用浏览器登录状态和网络连接；不会从 Python 静默改成直连接口。
 
-![](/docs/login-flow.svg)
+![](./docs/login-flow.svg)
 
 > 登录提示：请始终在程序打开的浏览器中登录。日常使用的其它浏览器与程序的登录状态并不共用。签到监测期间请勿关闭程序打开的 LMS/Application 学校页面；这些页面可以留在后台，不会抢占系统鼠标。
 
@@ -67,7 +67,7 @@
 - 确认页面地址中包含 `ua.dgut.edu.cn/learnCourse`。
 - 如果启用了自动答题，程序会优先使用本地登录缓存直接连接课程 AI，无需另开 AI 工作台；缓存不可用时才退回浏览器中的课程 AI 上下文。
 
-![打开到这样子的页面](/docs/course-page.png)
+![打开到这样子的页面](./docs/course-page.png)
 
 - 然后返回程序的刷课模块，按 `Enter` 或输入 `start` 启动。
 
