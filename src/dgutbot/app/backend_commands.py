@@ -8,11 +8,14 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from websocket import WebSocketException
+
 from dgutbot.agent.agent_protocol import AgentError
 from dgutbot.agent.agent_tools import build_registry
 from dgutbot.agent.agent_service import AgentService
 from dgutbot.app.app_paths import data_root
 from dgutbot.app.campus_startup import configure_campus_login_startup
+from dgutbot.app.homework_input import HomeworkInput
 from dgutbot.domain.yxy_backend import SignBackend
 from dgutbot.app.velopack_updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
@@ -126,6 +129,7 @@ def emit_event(code: str, level: str, category: str, message: str, **kwargs: Any
 
 
 backend = SignBackend(emit=emit, emit_event=emit_event, root=ROOT)
+HOMEWORK_INPUT = HomeworkInput(lambda: int(backend.config.debug_port))
 
 
 def _cached_course_ids() -> list[int]:
@@ -210,6 +214,13 @@ def courses() -> list[dict[str, Any]]:
 
 
 def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if command == "get_homework_input_status":
+        return {"ok": True, "homework": HOMEWORK_INPUT.status()}
+    if command == "send_homework_text":
+        try:
+            return {"ok": True, "homework": HOMEWORK_INPUT.send(payload.get("text"))}
+        except (OSError, RuntimeError, ValueError, WebSocketException) as error:
+            return {"ok": False, "error": str(error)}
     if command == "get_events":
         try:
             after_seq = max(0, int(payload.get("afterSeq", 0)))

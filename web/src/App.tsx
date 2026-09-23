@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, Settings, type LucideIcon } from "lucide-react";
 import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
@@ -8,12 +8,14 @@ import {
 import { stateLabel, toastFor, type UpdateStatus } from "./updateClient";
 import { UpdateBell, UpdateDrawer, UpdateFailureDialog, UpdateToast, useScrollRestore } from "./UpdateDrawer";
 import { AboutGuide } from "./AboutGuide";
+import { HomeworkInputPanel } from "./HomeworkInputPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStatus, type LessonItem } from "./courseScanView";
 import "./updateDrawer.css";
 import "./courseScan.css";
+import "./homeworkInput.css";
 
-type Page = "terminal" | "learning" | "settings" | "about";
+type Page = "terminal" | "learning" | "homework" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "selected" | "monitoring";
 type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
 type Course = { id: number; name: string; teacherName: string };
@@ -34,6 +36,7 @@ const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
   terminal: ClipboardCheck,
   learning: BookOpenCheck,
+  homework: PenLine,
   settings: Settings,
   about: CircleQuestionMark,
 };
@@ -543,8 +546,8 @@ function App() {
     if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", settings: "设置", about: "关于" };
+  const navItems: Page[] = ["terminal", "learning", "homework", "settings", "about"];
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业输入", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -666,6 +669,7 @@ function App() {
         </div>
       </section>}
       {page !== "terminal" && page !== "learning" && <div className={`settings-body ${page === "about" ? "about-settings-body" : ""}`}>
+      {page === "homework" && <HomeworkInputPanel />}
       {page === "settings" && <SettingsSection className="utility-settings" title="设置">
         <div className="settings-surface">
         <Card title="启动浏览器"><div className="browser-scan-line"><button type="button" className={`refresh-button ${detectingBrowsers ? "spinning" : ""}`} aria-label={detectingBrowsers ? "正在重新检测浏览器" : "重新检测浏览器"} title={detectingBrowsers ? "检测中…" : "重新检测"} disabled={detectingBrowsers} onClick={detectInstalledBrowsers}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1 .1-6.1L20 11"/></svg></button></div><div className="browser-list">{detectedBrowsers.map(option => { const selected = browser !== "自定义浏览器" && samePath(path, option.path); return <button type="button" key={option.path} className={`browser-option ${selected ? "selected" : ""}`} onClick={() => chooseDetectedBrowser(option)}><i className="radio-dot"/><strong>{option.name}</strong></button>; })}<button type="button" className={`browser-option ${browser === "自定义浏览器" ? "selected" : ""}`} onClick={chooseCustomBrowser}><i className="radio-dot"/><strong>自定义路径</strong></button></div>{browser === "自定义浏览器" && <label className="custom-browser-path"><span>程序路径</span><input className="field" value={path} onChange={event => setPath(event.target.value)}/></label>}</Card>

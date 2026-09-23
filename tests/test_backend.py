@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from dgutbot.domain.yxy_backend import Activity, AppConfig, BrowserApiClient, Course, MonitorState, SignBackend
+from dgutbot.domain.yxy_backend import Activity, AppConfig, BrowserApiClient, Classroom, Course, MonitorState, SignBackend
 from dgutbot.app.backend_commands import EventBuffer
 from dgutbot.app.browser_paths import registered_browser_paths
 
@@ -306,6 +306,22 @@ class BackendTests(unittest.TestCase):
             self.assertIn("HTTP: 200", log)
             self.assertIn('rawResponse: {"status":200,"msg":"ok"}', log)
 
+    def test_qr_sign_submits_empty_code_when_activity_has_no_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.user_id = 7
+            activity = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 1, "state": 0, "status": 0,
+            })
+            response = Mock()
+            response.status_code = 200
+            response.text = '{"status":200,"newStatus":1}'
+            response.json.return_value = {"status": 200, "newStatus": 1}
+            with patch.object(backend, "_direct_sign_request", return_value=response) as request:
+                self.assertTrue(backend._sign(Course(1, "测试课程"), 22, activity))
+            self.assertEqual(request.call_args.args[0]["attendanceCode"], "")
+            self.assertEqual(request.call_args.args[0]["attendanceID"], 11)
+
     def test_direct_sign_replays_verified_school_request_without_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             backend = self.make_backend(Path(directory))
@@ -320,8 +336,24 @@ class BackendTests(unittest.TestCase):
             browser_request.assert_not_called()
             self.assertEqual(post.call_args.args[0], "https://application.dgut.edu.cn/classroomapi/newAttendance/signByStu")
             self.assertEqual(post.call_args.kwargs["json"], payload)
-            self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "verified-token")
-            self.assertEqual(post.call_args.kwargs["cookies"]["AUTHORIZATION"], "verified-token")
+            headers = post.call_args.kwargs["headers"]
+            self.assertEqual(headers["Authorization"], "verified-token")
+            self.assertIn("Android 13; Pixel 5", headers["User-Agent"])
+            self.assertIn("umoocApp", headers["User-Agent"])
+            self.assertEqual(headers["Accept"], "application/json, text/plain, */*")
+            self.assertEqual(headers["Accept-Language"], "zh-CN")
+            self.assertEqual(headers["Content-Type"], "application/json;charset=UTF-8")
+            self.assertEqual(headers["sec-ch-ua-platform"], '"Android"')
+            self.assertIn('"Android WebView";v="150"', headers["sec-ch-ua"])
+            self.assertEqual(headers["sec-ch-ua-mobile"], "?1")
+            self.assertEqual(headers["Origin"], "https://lms.dgut.edu.cn")
+            self.assertEqual(headers["Referer"], "https://lms.dgut.edu.cn/")
+            self.assertEqual(headers["X-Requested-With"], "cn.ulearning.yxy")
+            self.assertEqual(headers["Sec-Fetch-Dest"], "empty")
+            self.assertEqual(headers["Sec-Fetch-Mode"], "cors")
+            self.assertEqual(headers["Sec-Fetch-Site"], "same-site")
+            self.assertNotIn("DNT", headers)
+            self.assertNotIn("cookies", post.call_args.kwargs)
             self.assertEqual(post.call_args.kwargs["timeout"], 15)
 
     def test_sign_treats_platform_already_involved_status_as_complete(self):
@@ -351,6 +383,39 @@ class BackendTests(unittest.TestCase):
             ), patch.object(backend, "_sign", return_value=False) as sign:
                 self.assertEqual(backend._poll_once(set()), "已处理 1 个签到活动")
             sign.assert_called_once()
+
+    def test_poll_uses_begin_time_when_reused_classroom_title_has_old_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.selected_course = Course(1, "系统工程")
+            classroom = Classroom.from_api({
+                "id": 22,
+                "title": "09-09 创建的旧课堂",
+                "beginTime": int(datetime.now().timestamp() * 1000),
+            })
+            activity = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 2, "state": 1, "status": 0,
+            })
+            with patch.object(backend, "_classrooms", return_value=[classroom]), patch.object(
+                backend, "_activities", return_value=[activity],
+            ), patch.object(backend, "_sign", return_value=False) as sign:
+                self.assertEqual(backend._poll_once(set()), "已处理 1 个签到活动")
+            sign.assert_called_once_with(backend.selected_course, 22, activity)
+
+    def test_poll_does_not_trust_title_when_begin_time_is_from_another_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.selected_course = Course(1, "系统工程")
+            classroom = Classroom.from_api({
+                "id": 22,
+                "title": datetime.now().strftime("%m-%d"),
+                "beginTime": int(datetime.now().timestamp() * 1000) - 86_400_000,
+            })
+            with patch.object(backend, "_classrooms", return_value=[classroom]), patch.object(
+                backend, "_activities",
+            ) as activities:
+                self.assertEqual(backend._poll_once(set()), "今日暂无课堂")
+            activities.assert_not_called()
 
     def test_browser_launch_uses_debug_mode_and_opens_requested_url(self):
         with tempfile.TemporaryDirectory() as directory:

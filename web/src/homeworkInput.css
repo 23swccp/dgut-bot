@@ -1,0 +1,20 @@
+.homework-page{max-width:850px}
+.homework-card{padding:26px}
+.homework-status-line{display:flex;align-items:center;gap:12px;margin-bottom:25px;padding:14px 16px;border:1px solid #e2e9e5;border-radius:11px;background:#f8fbf9}
+.homework-status-line strong,.homework-status-line small{display:block}
+.homework-status-line strong{color:#263b32;font-size:14px}
+.homework-status-line small{margin-top:4px;color:#748278;font-size:12px}
+.homework-status-dot{width:10px;height:10px;flex:none;border-radius:50%;background:#a6afb4;box-shadow:0 0 0 4px #e8ecee}
+.homework-status-dot.ready{background:#16a36a;box-shadow:0 0 0 4px #dff5e9}
+.homework-status-dot.disconnected,.homework-status-dot.ambiguous{background:#d78d32;box-shadow:0 0 0 4px #fbefd9}
+.homework-input-label{display:block;margin-bottom:10px;color:#374458;font-size:14px;font-weight:700}
+.homework-card textarea{display:block;width:100%;min-height:280px;resize:vertical;padding:17px;border:1px solid #d9e2df;border-radius:11px;outline:0;background:#fff;color:#263344;font:15px/1.7 "Microsoft YaHei UI",sans-serif}
+.homework-card textarea:focus{border-color:#19a66b;box-shadow:0 0 0 3px #1ca66a1c}
+.homework-card textarea:disabled{background:#f8f9f9}
+.homework-actions{display:flex;align-items:center;justify-content:space-between;margin-top:14px}
+.homework-actions span{color:#889395;font-size:12px}
+.homework-actions .primary{min-width:96px}
+.homework-result{margin-top:16px;padding:10px 12px;border-radius:8px;font-size:13px}
+.homework-result.good{color:#087647;background:#e9f8ef}
+.homework-result.error{color:#a34136;background:#fff0ed}
+.homework-note{margin-top:15px;color:#8a949a;font-size:12px}

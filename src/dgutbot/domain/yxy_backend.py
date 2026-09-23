@@ -1370,6 +1370,21 @@ class SignBackend:
         return [Activity.from_api(activity) for activity in raw_activities]
 
     @staticmethod
+    def _classroom_is_today(classroom: Classroom, now: datetime | None = None) -> bool:
+        """优先使用课堂开始时间；旧接口缺少时间时才兼容标题日期。"""
+        current = now or datetime.now()
+        classroom_raw = getattr(classroom, "raw", {})
+        raw = classroom_raw if isinstance(classroom_raw, dict) else {}
+        begin_time = raw.get("beginTime")
+        try:
+            milliseconds = float(begin_time)
+            if math.isfinite(milliseconds):
+                return datetime.fromtimestamp(milliseconds / 1000).date() == current.date()
+        except (OSError, OverflowError, TypeError, ValueError):
+            pass
+        return current.strftime("%m-%d") in classroom.title
+
+    @staticmethod
     def _kind(score_type: int | None) -> str:
         return {0: "选人点名", 1: "二维码签到", 2: "数字码签到", 3: "一键签到"}.get(score_type, "未知签到")
 
@@ -1406,23 +1421,30 @@ class SignBackend:
         token = str(self.headers.get("Authorization") or self.token or "").strip()
         if not token:
             raise RuntimeError("缺少 Authorization，无法直接提交签到")
+        # 2026-09-22 Reqable 抓到官方 Android 应用的 signByStu POST。
+        # 仅复用公开的请求上下文；Authorization 仍取自当前已验证的登录会话。
         headers = {
-            "User-Agent": self.headers.get("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 5 Build/TP1A.221005.002; wv) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+            "Chrome/150.0.7871.46 Mobile Safari/537.36 umoocApp umoocApp -language-zh",
             "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN",
             "Content-Type": "application/json;charset=UTF-8",
+            "sec-ch-ua-platform": '"Android"',
+            "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Android WebView";v="150"',
+            "sec-ch-ua-mobile": "?1",
             "Origin": "https://lms.dgut.edu.cn",
-            "Referer": "https://lms.dgut.edu.cn/classroom/student.html",
-            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://lms.dgut.edu.cn/",
+            "X-Requested-With": "cn.ulearning.yxy",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
             "Authorization": token,
         }
-        # 旧脚本同时携带 Authorization 请求头与同名 Cookie。保留这一行为，
-        # 避免学校网关在不同节点采用不同的认证读取方式。
-        cookies = {"AUTHORIZATION": token, "token": token}
         return requests.post(
             f"{APP_BASE}/newAttendance/signByStu",
             json=payload,
             headers=headers,
-            cookies=cookies,
             timeout=15,
         )
 
@@ -1431,11 +1453,6 @@ class SignBackend:
         kind = self._kind(score_type)
         activity_id = activity.relation_id
         code = self._attendance_code(activity) if score_type == 1 else ""
-        if score_type == 1 and not code:
-            message = "未找到二维码签到码，已跳过"
-            self._log(f"[{course.name}] {kind}：{message}", "warn")
-            self._write_sign_log(course.name, kind, [f"attendanceID: {activity_id}", "result: skipped", f"reason: {message}"])
-            return True
         if score_type not in (1, 2, 3):
             self._log(f"[{course.name}] {kind}：当前类型不支持自动处理，已跳过", "warn")
             self._write_sign_log(course.name, kind, [f"attendanceID: {activity_id}", "result: skipped", "reason: unsupported scoreType"])
@@ -1475,12 +1492,12 @@ class SignBackend:
         return status in (200, 201, 209)
 
     def _poll_once(self, checked: set[str]) -> str:
-        today = datetime.now().strftime("%m-%d")
         course = self.selected_course
         if course is None:
             self._log("尚未选择课程，轮询已跳过。", "warn")
             return "尚未选择课程"
-        classrooms = [item for item in self._classrooms(course.id) if today in item.title]
+        now = datetime.now()
+        classrooms = [item for item in self._classrooms(course.id) if self._classroom_is_today(item, now)]
         if not classrooms:
             self._log(f"[{course.name}] 本轮完成：今天没有课堂，无需签到。", "muted")
             return "今日暂无课堂"
