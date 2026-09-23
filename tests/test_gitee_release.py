@@ -135,6 +135,8 @@ def test_curl_upload_uses_configured_timeout_without_exposing_token(tmp_path, mo
 
     def fake_run(args, **kwargs):
         assert args[args.index("--max-time") + 1] == "3600"
+        assert args[args.index("--speed-limit") + 1] == "100"
+        assert args[args.index("--speed-time") + 1] == "300"
         assert "secret" not in " ".join(args)
         assert "Authorization: Bearer secret" in kwargs["input"]
         Path(args[args.index("--output") + 1]).write_text(

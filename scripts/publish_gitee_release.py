@@ -58,7 +58,7 @@ def _curl_upload(url: str, token: str, asset: Path, asset_name: str) -> Any:
         result = subprocess.run([
             "curl", "-q", "--config", "-", "--http1.1", "--silent", "--show-error",
             "--fail-with-body", "--header", "Expect: 100-continue", "--expect100-timeout", "10",
-            "--connect-timeout", "20", "--max-time", str(max_time), "--speed-limit", "1024", "--speed-time", "45",
+            "--connect-timeout", "20", "--max-time", str(max_time), "--speed-limit", "100", "--speed-time", "300",
             "--header", "Accept: application/json", "--user-agent", "dgut-bot-release-workflow",
             "--form", f"file=@{asset.resolve()};filename={asset_name};type=application/vnd.microsoft.portable-executable",
             "--output", str(body), "--write-out", "HTTP %{http_code}; uploaded %{size_upload} bytes; speed %{speed_upload} B/s\n", url,
