@@ -27,6 +27,8 @@ from dgutbot.app.browser_paths import (
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
+from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
+from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
 from dgutbot.domain.sign_monitor import (
     LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
 )
@@ -463,6 +465,8 @@ class SignBackend:
         self.token = credentials.get("token") or TOKEN
         cached_user_id = credentials.get("user_id")
         self.user_id: int | None = cached_user_id if isinstance(cached_user_id, int) else USER_ID
+        self.display_name = str(credentials.get("display_name") or "").strip()[:80]
+        self.account_name = str(credentials.get("account_name") or "").strip()[:80]
         self.courses: list[Course] = []
         self.selected_course: Course | None = None
         self.browser_start_lock = threading.Lock()
@@ -489,6 +493,10 @@ class SignBackend:
         self._course_starting = False
         self.course_scan = CourseScanService(
             lambda: list(self.courses), self._scan_course_directory,
+            lambda: bool(self.token and self.courses), self._redact,
+        )
+        self.homework_scan = HomeworkScanService(
+            lambda: list(self.courses), self._scan_course_homeworks,
             lambda: bool(self.token and self.courses), self._redact,
         )
         self._auto_course_lock = threading.Lock()
@@ -657,6 +665,22 @@ class SignBackend:
         finally:
             api.close()
 
+    def _scan_course_homeworks(self, course: Course) -> Any:
+        """每个扫描 worker 使用独立 CDP 会话读取一门课程的全部作业。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            try:
+                return api.request(
+                    "GET", f"{LMS_BASE}/homeworks/student/v2",
+                    params={"ocId": course.id, "pn": 1, "ps": 999, "lang": "zh"}, timeout=12,
+                ).json()
+            except Exception as error:
+                if self._is_login_rejected(error):
+                    raise HomeworkAuthRequiredError("登录已失效") from error
+                raise
+        finally:
+            api.close()
+
     @staticmethod
     def _directory_json(api: BrowserApiClient, url: str, *, params: dict[str, Any] | None = None) -> Any:
         """目录请求先快速失败；仅对浏览器超时做一次更短的瞬时重试。"""
@@ -741,6 +765,210 @@ class SignBackend:
 
     def course_scan_status(self) -> dict:
         return self.course_scan.snapshot()
+
+    def start_homework_scan(self, *, force: bool = False) -> dict:
+        if not self.courses and self.token:
+            self.load_saved_courses()
+        return self.homework_scan.start(force=force)
+
+    def cancel_homework_scan(self) -> dict:
+        return self.homework_scan.cancel()
+
+    def homework_scan_status(self) -> dict:
+        return self.homework_scan.snapshot()
+
+    def _homework_review_payloads(self, item: dict[str, Any]) -> tuple[Any, Any, Any]:
+        if self.user_id is None:
+            raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
+        homework_id = str(item.get("homeworkId") or "")
+        course_id = str(item.get("courseId") or "")
+        if not homework_id.isdigit() or not course_id.isdigit():
+            raise ValueError("互评作业标识无效，请重新扫描")
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            detail = api.request(
+                "GET", f"https://lms.dgut.edu.cn/homeworkapi/stuHomework/homeworkDetail/{homework_id}/{self.user_id}/{course_id}",
+                timeout=12,
+            ).json()
+            peers = api.request(
+                "GET", f"https://lms.dgut.edu.cn/homeworkapi/stuHomework/peerReviewHomeworkDatil/{homework_id}/{self.user_id}",
+                timeout=12,
+            ).json()
+            rules = api.request(
+                "GET", f"https://lms.dgut.edu.cn/homeworkapi/teaHomework/peerReviewHomeworkRule/{homework_id}",
+                timeout=12,
+            ).json()
+            return detail, peers, rules
+        except Exception as error:
+            if self._is_login_rejected(error):
+                raise HomeworkAuthRequiredError("登录已失效，请重新登录") from error
+            raise
+        finally:
+            api.close()
+
+    def homework_review(self, item_id: str) -> dict[str, Any]:
+        item = self.homework_scan.item(str(item_id))
+        if item is None:
+            raise ValueError("未找到互评作业，请重新扫描")
+        detail, peers, rules = self._homework_review_payloads(item)
+        return normalize_homework_review(str(item_id), detail, peers, rules)
+
+    @staticmethod
+    def _homework_deadline_open(value: Any) -> bool:
+        """批量操作只接受能够确认且尚未到达的截止时间。"""
+        if not value:
+            return False
+        try:
+            deadline = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+            if deadline.tzinfo is None:
+                deadline = deadline.astimezone()
+            return deadline > datetime.now().astimezone()
+        except (OSError, TypeError, ValueError):
+            return False
+
+    def _post_homework_review_payloads(self, payloads: list[dict[str, Any]]) -> int:
+        submitted = 0
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            for payload in payloads:
+                try:
+                    result = api.request(
+                        "POST", "https://lms.dgut.edu.cn/homeworkapi/stuHomework/savePeerReview",
+                        json=payload, timeout=15,
+                    ).json()
+                except Exception as error:
+                    if self._is_login_rejected(error):
+                        raise HomeworkAuthRequiredError("登录已失效，请重新登录") from error
+                    raise RuntimeError(f"已提交 {submitted} 份，第 {submitted + 1} 份提交失败：{self._redact(error)}") from error
+                code = result.get("code") if isinstance(result, dict) else None
+                if code not in (None, 0, 1, 200):
+                    message = result.get("message") or result.get("msg") or f"返回状态 {code}"
+                    raise RuntimeError(f"已提交 {submitted} 份，第 {submitted + 1} 份提交失败：{self._redact(message)}")
+                submitted += 1
+        finally:
+            api.close()
+        return submitted
+
+    def submit_homework_reviews(self, item_id: str, drafts: Any) -> dict[str, Any]:
+        """提交前重新读取服务端互评对象，避免使用过期或伪造的学生/互评标识。"""
+        item = self.homework_scan.item(str(item_id))
+        if item is None:
+            raise ValueError("未找到互评作业，请重新扫描")
+        detail, peers, rules = self._homework_review_payloads(item)
+        if self.user_id is None:
+            raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
+        payloads = build_peer_review_payloads(detail, peers, rules, drafts, self.user_id)
+        submitted = self._post_homework_review_payloads(payloads)
+        return {"submitted": submitted, "total": len(payloads), "message": f"已提交 {submitted} 份互评"}
+
+    def pending_homework_review_candidates(self) -> dict[str, Any]:
+        """只读预检批量 100 分候选，详情接口必须明确确认当前处于互评时间。"""
+        if self.user_id is None:
+            raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
+        snapshot = self.homework_scan.snapshot()
+        if snapshot.get("state") != "completed":
+            raise ValueError("作业扫描尚未完成，请完成扫描后再检查")
+        preliminary = [
+            item for group in snapshot.get("groups", []) for item in group.get("items", [])
+            if item.get("needsAction") and self._homework_deadline_open(item.get("endTime"))
+        ]
+        candidates: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        for item in preliminary:
+            try:
+                detail, peers, rules = self._homework_review_payloads(item)
+                review = normalize_homework_review(str(item.get("id") or ""), detail, peers, rules)
+                if float(review.get("fullScore") or 0) < 100:
+                    continue
+                tasks = [task for task in review.get("tasks", []) if not task.get("wasScored") and task.get("editable")]
+                if not tasks:
+                    continue
+                drafts = [{
+                    "key": task["key"], "score": 100, "comment": "",
+                    "ruleScores": {rule["key"]: rule["score"] for rule in task.get("rules", [])},
+                } for task in tasks]
+                build_peer_review_payloads(detail, peers, rules, drafts, self.user_id)
+                candidates.append({
+                    "itemId": str(item.get("id") or ""),
+                    "courseName": str(item.get("courseName") or "未命名课程")[:200],
+                    "title": str(item.get("title") or "未命名作业")[:200],
+                    "reviewCount": len(tasks),
+                })
+            except HomeworkAuthRequiredError:
+                raise
+            except Exception as error:
+                failures.append({
+                    "itemId": str(item.get("id") or ""),
+                    "title": str(item.get("title") or "未命名作业")[:200],
+                    "reason": self._redact(error),
+                })
+        return {"items": candidates, "failures": failures}
+
+    def submit_pending_homework_reviews(self, item_ids: Any) -> dict[str, Any]:
+        """为快照中未互评、未过期且服务端仍允许填写的未评分内容提交 100 分。"""
+        if self.user_id is None:
+            raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
+        if not isinstance(item_ids, list) or not item_ids or len(item_ids) > 100:
+            raise ValueError("待提交作业清单无效，请重新扫描")
+        requested = [str(value or "") for value in item_ids]
+        if any(not value for value in requested) or len(set(requested)) != len(requested):
+            raise ValueError("待提交作业清单包含无效或重复项目")
+        snapshot = self.homework_scan.snapshot()
+        if snapshot.get("state") != "completed":
+            raise ValueError("作业扫描尚未完成，请完成扫描后再提交")
+        all_items = {
+            str(item.get("id") or ""): item
+            for group in snapshot.get("groups", []) for item in group.get("items", [])
+        }
+        if set(requested) - set(all_items):
+            raise ValueError("待提交作业已失效，请重新扫描")
+        candidates = [
+            all_items[item_id] for item_id in requested
+            if all_items[item_id].get("needsAction")
+            and self._homework_deadline_open(all_items[item_id].get("endTime"))
+        ]
+        submitted_assignments = 0
+        submitted_reviews = 0
+        skipped_assignments = 0
+        failures: list[dict[str, str]] = []
+        for item in candidates:
+            try:
+                detail, peers, rules = self._homework_review_payloads(item)
+                review = normalize_homework_review(str(item.get("id") or ""), detail, peers, rules)
+                if float(review.get("fullScore") or 0) < 100:
+                    raise ValueError("作业满分低于 100，无法填写 100 分")
+                tasks = [task for task in review.get("tasks", []) if not task.get("wasScored") and task.get("editable")]
+                if not tasks:
+                    skipped_assignments += 1
+                    continue
+                drafts = [{
+                    "key": task["key"], "score": 100, "comment": "",
+                    "ruleScores": {rule["key"]: rule["score"] for rule in task.get("rules", [])},
+                } for task in tasks]
+                payloads = build_peer_review_payloads(detail, peers, rules, drafts, self.user_id)
+                submitted_reviews += self._post_homework_review_payloads(payloads)
+                submitted_assignments += 1
+            except HomeworkAuthRequiredError:
+                raise
+            except Exception as error:
+                failures.append({
+                    "itemId": str(item.get("id") or ""),
+                    "title": str(item.get("title") or "未命名作业")[:200],
+                    "reason": self._redact(error),
+                })
+        parts = [f"已为 {submitted_assignments} 个作业提交 {submitted_reviews} 份 100 分互评"]
+        if skipped_assignments:
+            parts.append(f"{skipped_assignments} 个作业没有未评分内容")
+        if failures:
+            parts.append(f"{len(failures)} 个作业提交失败")
+        return {
+            "candidateAssignments": len(candidates),
+            "submittedAssignments": submitted_assignments,
+            "submittedReviews": submitted_reviews,
+            "skippedAssignments": skipped_assignments,
+            "failures": failures,
+            "message": "；".join(parts),
+        }
 
     def _log(self, text: str, kind: str = "muted") -> None:
         self.emit(text, kind)
@@ -959,14 +1187,23 @@ class SignBackend:
     def _persist_credentials(self) -> None:
         """把最近一次有效凭据保存到本地 auth.json，绝不修改或污染源码。"""
         try:
-            self._write_json_atomic(self.root / "auth.json", {"token": self.token, "user_id": self.user_id})
+            values = {"token": self.token, "user_id": self.user_id}
+            if self.display_name:
+                values["display_name"] = self.display_name
+            if self.account_name:
+                values["account_name"] = self.account_name
+            self._write_json_atomic(self.root / "auth.json", values)
             self._log("已更新本地应用登录缓存。", "success")
         except OSError as error:
             self._log(f"保存本地登录缓存失败：{error}", "warn")
 
-    def _apply_token(self, token: str, user_id: int | None) -> None:
+    def _apply_token(
+        self, token: str, user_id: int | None, *, display_name: str = "", account_name: str = "",
+    ) -> None:
         self.token = token
         self.user_id = user_id
+        self.display_name = display_name.strip()[:80]
+        self.account_name = account_name.strip()[:80]
         self.headers["Authorization"] = token
         self._persist_credentials()
 
@@ -974,6 +1211,8 @@ class SignBackend:
         """丢弃已被服务端或登录跳转拒绝的缓存，不再把它当作候选身份。"""
         self.token = ""
         self.user_id = None
+        self.display_name = ""
+        self.account_name = ""
         self.headers.pop("Authorization", None)
         try:
             (self.root / "auth.json").unlink(missing_ok=True)
@@ -1000,15 +1239,51 @@ class SignBackend:
 
     @classmethod
     def _browser_user_id(cls, cookies: list[dict]) -> int | None:
+        return cls._browser_identity(cookies)[0]
+
+    @staticmethod
+    def _identity_text(value: Any) -> str:
+        if value in (None, "") or isinstance(value, (dict, list)):
+            return ""
+        return " ".join(str(value).split())[:80]
+
+    @classmethod
+    def _browser_identity(cls, cookies: list[dict]) -> tuple[int | None, str, str]:
         direct = cls._browser_cookie(cookies, "userid")
-        if direct.isdigit():
-            return int(direct)
+        user_id = int(direct) if direct.isdigit() else None
         raw_user = cls._browser_cookie(cookies, "USERINFO")
         try:
-            value = json.loads(unquote(raw_user)).get("userId") if raw_user else None
-            return int(value) if value is not None else None
+            value = json.loads(unquote(raw_user)) if raw_user else {}
         except (TypeError, ValueError, json.JSONDecodeError):
-            return None
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        containers = [value] + [
+            value[key] for key in ("user", "userInfo", "data") if isinstance(value.get(key), dict)
+        ]
+        if user_id is None:
+            raw_id = next((container.get("userId") for container in containers if container.get("userId") not in (None, "")), None)
+            try:
+                user_id = int(raw_id) if raw_id is not None else None
+            except (TypeError, ValueError):
+                user_id = None
+        display_keys = ("realName", "name", "studentName", "nickName", "userName")
+        account_keys = ("loginName", "username", "userNo", "studentNo", "studentId", "account")
+        display_name = next((cls._identity_text(container.get(key)) for container in containers for key in display_keys if cls._identity_text(container.get(key))), "")
+        account_name = next((cls._identity_text(container.get(key)) for container in containers for key in account_keys if cls._identity_text(container.get(key))), "")
+        return user_id, display_name, account_name
+
+    def login_status(self) -> dict[str, Any]:
+        """返回可展示的当前身份；不向前端暴露 Token、Cookie 或密码。"""
+        authenticated = bool(self.token and self.courses)
+        label = self.display_name or self.account_name or (str(self.user_id) if self.user_id is not None else "")
+        return {
+            "authenticated": authenticated,
+            "displayName": self.display_name,
+            "accountName": self.account_name,
+            "userId": self.user_id,
+            "greeting": f"你好，{label}！" if authenticated and label else ("你好！" if authenticated else ""),
+        }
 
     def _relogin_with_account(self) -> bool:
         """使用用户明确保存的账号密码重新获取 Token；每次调用只尝试一次。"""
@@ -1035,12 +1310,14 @@ class SignBackend:
             if not token:
                 self._log("账号密码重新登录失败：未收到登录凭据。", "warn")
                 return False
-            try:
-                user_id = json.loads(unquote(raw_user)).get("userId") if raw_user else None
-                user_id = int(user_id) if user_id is not None else None
-            except (TypeError, ValueError, json.JSONDecodeError):
-                user_id = None
-            self._apply_token(token, user_id)
+            response_cookies = [{"name": key, "value": value} for key, value in response.cookies.items()]
+            if raw_user and not any(str(item.get("name")).casefold() == "userinfo" for item in response_cookies):
+                response_cookies.append({"name": "USERINFO", "value": raw_user})
+            user_id, display_name, account_name = self._browser_identity(response_cookies)
+            self._apply_token(
+                token, user_id, display_name=display_name,
+                account_name=account_name or str(account.get("username") or ""),
+            )
             self._log("账号密码重新登录成功，已更新本地登录缓存。", "success")
             return True
         except requests.RequestException as error:
@@ -1266,6 +1543,7 @@ class SignBackend:
             return False
 
         previous_token, previous_user_id = self.token, self.user_id
+        previous_display_name, previous_account_name = self.display_name, self.account_name
         previous_authorization = self.headers.get("Authorization")
         self.headers["Authorization"] = candidate_token
         try:
@@ -1276,6 +1554,7 @@ class SignBackend:
                 self._discard_credentials()
             else:
                 self.token, self.user_id = previous_token, previous_user_id
+                self.display_name, self.account_name = previous_display_name, previous_account_name
                 if previous_authorization:
                     self.headers["Authorization"] = previous_authorization
                 else:
@@ -1285,6 +1564,7 @@ class SignBackend:
             return False
         if not courses:
             self.token, self.user_id = previous_token, previous_user_id
+            self.display_name, self.account_name = previous_display_name, previous_account_name
             if previous_authorization:
                 self.headers["Authorization"] = previous_authorization
             else:
@@ -1293,7 +1573,7 @@ class SignBackend:
                 self._log("没有读取到课程，请确认登录账号与网络状态。", "warn")
             return False
         self.token = candidate_token
-        self.user_id = self._browser_user_id(dgut)
+        self.user_id, self.display_name, self.account_name = self._browser_identity(dgut)
         self.courses = courses
         self._rejected_browser_token = ""
         self._persist_credentials()

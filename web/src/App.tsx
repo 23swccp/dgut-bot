@@ -18,6 +18,7 @@ import "./homeworkInput.css";
 type Page = "terminal" | "learning" | "homework" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "selected" | "monitoring";
 type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
+type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
 type Course = { id: number; name: string; teacherName: string };
 type BrowserOption = { name: string; path: string };
 type AppConfig = {
@@ -30,7 +31,7 @@ type AppConfig = {
 };
 type AppInfo = { appName: string; version: string; repo: string };
 type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string };
-type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
+type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
@@ -46,6 +47,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const reduceMotion = useReducedMotion();
   const [phase, setPhase] = useState<Phase>("ready");
+  const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null);
   const [command, setCommand] = useState("");
   const [courseCursor, setCourseCursor] = useState(0);
   const [learningCommand, setLearningCommand] = useState("");
@@ -87,6 +89,7 @@ function App() {
   const handoffSentRef = useRef(false);
   const autoOpenedUpdateRef = useRef("");
   const signInitializationStartedRef = useRef(false);
+  const greetedLoginRef = useRef("");
   const learningScanStartedRef = useRef(false);
   const drawerScroll = useScrollRestore(drawerOpen);
   const signLogRef = useRef<HTMLDivElement>(null);
@@ -104,6 +107,15 @@ function App() {
     level,
   }));
   const appendLearning = (line: string) => setLearningLogs(items => [...items, `[${formatClock(new Date().toISOString())}] ${line}`].slice(-80));
+  const acceptLoginStatus = (login?: LoginStatus) => {
+    if (!login) return;
+    setLoginStatus(login);
+    const identity = login.displayName || login.accountName || String(login.userId || "");
+    if (login.authenticated && login.greeting && greetedLoginRef.current !== identity) {
+      greetedLoginRef.current = identity;
+      append(login.greeting, "success");
+    }
+  };
   const courseChoices = [...new Map<number, Course>(courses.map(course => [course.id, course])).values()];
   const courseQuery = command.trim().toLocaleLowerCase();
   const matchingCourses = courseChoices.filter(course => !courseQuery || `${course.name} ${course.teacherName} ${course.id}`.toLocaleLowerCase().includes(courseQuery));
@@ -140,6 +152,7 @@ function App() {
       else append(`后端连接失败：${result.error || "未知错误"}`);
     });
     void call("get_account_login_status").then(result => { if (result.ok && result.account) loadAccount(result.account); });
+    void call("get_login_status").then(result => { if (result.ok) acceptLoginStatus(result.login); });
     void detectInstalledBrowsers();
   }, []);
   useEffect(() => {
@@ -171,7 +184,9 @@ function App() {
       checking = true;
       const result = await call("load_session_and_courses", { automatic: true, waitSeconds: 1 });
       checking = false;
-      if (disposed || !result.ok || !result.courses?.length) return;
+      if (disposed) return;
+      acceptLoginStatus(result.login);
+      if (!result.ok || !result.courses?.length) return;
       setCourses(result.courses);
       setPhase("courses");
       setBusy(false);
@@ -404,6 +419,7 @@ function App() {
   async function initializeSignIn() {
     setBusy(true);
     const result = await call("load_saved_courses");
+    acceptLoginStatus(result.login);
     if (result.ok && result.courses?.length) {
       setCourses(result.courses);
       setPhase("courses");
@@ -518,6 +534,7 @@ function App() {
       append("正在自动检测浏览器登录状态，请稍候。");
     } else if (phase === "ready") {
       const result = await call("load_saved_courses");
+      acceptLoginStatus(result.login);
       if (result.ok && result.courses?.length) { setCourses(result.courses); setPhase("courses"); }
       else {
         append("登录缓存不可用，正在自动打开优学院登录页…"); setPhase("login");
@@ -547,7 +564,7 @@ function App() {
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
   const navItems: Page[] = ["terminal", "learning", "homework", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业输入", settings: "设置", about: "关于" };
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -595,7 +612,7 @@ function App() {
           animate={{ width: 260, x: 0, opacity: 1 }}
           exit={reduceMotion ? { width: 0 } : { width: 0, x: -18, opacity: 0 }}
           transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        ><div className="module-brand">优学院助手</div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => { setPage(item); if (item === "settings" || item === "about") setDrawerOpen(false); }} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
+        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => { setPage(item); if (item === "settings" || item === "about") setDrawerOpen(false); }} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
       {showHeaderUpdate && <UpdateBell status={updateStatus} open={drawerOpen} onToggle={toggleDrawer} />}

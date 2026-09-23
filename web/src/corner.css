@@ -213,13 +213,19 @@
   right: 14px;
   height: 54px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
   color: #2f3745;
-  font-size: 17px;
-  font-weight: 700;
   white-space: nowrap;
   border-bottom: 1px solid #edf0f2;
 }
+
+.module-brand strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 16px; line-height: 20px; }
+.module-brand small { display: flex; max-width: 100%; align-items: center; gap: 5px; overflow: hidden; color: #8a929d; font-size: 10px; font-weight: 500; line-height: 15px; text-overflow: ellipsis; }
+.module-brand small i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #aab1ba; }
+.module-brand small.online { color: #07854f; }
+.module-brand small.online i { background: #14a668; box-shadow: 0 0 0 2px #dff5e9; }
 
 .settings-body h2,
 .settings-body h3 {

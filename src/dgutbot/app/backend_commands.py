@@ -221,6 +221,34 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "homework": HOMEWORK_INPUT.send(payload.get("text"))}
         except (OSError, RuntimeError, ValueError, WebSocketException) as error:
             return {"ok": False, "error": str(error)}
+    if command == "start_homework_scan":
+        return {"ok": True, "homeworkScan": backend.start_homework_scan(force=bool(payload.get("force")))}
+    if command == "cancel_homework_scan":
+        return {"ok": True, "homeworkScan": backend.cancel_homework_scan()}
+    if command == "get_homework_scan_status":
+        return {"ok": True, "homeworkScan": backend.homework_scan_status()}
+    if command == "get_homework_review":
+        try:
+            return {"ok": True, "homeworkReview": backend.homework_review(str(payload.get("itemId") or ""))}
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
+    if command == "submit_homework_reviews":
+        try:
+            return {"ok": True, "reviewSubmit": backend.submit_homework_reviews(
+                str(payload.get("itemId") or ""), payload.get("drafts"),
+            )}
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
+    if command == "get_pending_homework_review_candidates":
+        try:
+            return {"ok": True, "bulkReviewCandidates": backend.pending_homework_review_candidates()}
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
+    if command == "submit_pending_homework_reviews":
+        try:
+            return {"ok": True, "bulkReviewSubmit": backend.submit_pending_homework_reviews(payload.get("itemIds"))}
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
     if command == "get_events":
         try:
             after_seq = max(0, int(payload.get("afterSeq", 0)))
@@ -228,7 +256,10 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             after_seq = 0
         return {"ok": True, **EVENT_BUFFER.get_events(after_seq)}
     if command == "load_saved_courses":
-        return {"ok": backend.load_saved_courses(), "courses": courses()}
+        ok = backend.load_saved_courses()
+        return {"ok": ok, "courses": courses(), "login": backend.login_status()}
+    if command == "get_login_status":
+        return {"ok": True, "login": backend.login_status()}
     if command == "ai_chat":
         try:
             model_id = int(payload.get("modelId", backend.config.course_ai_model_id))
@@ -275,6 +306,7 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": backend.load_session_and_courses(wait_seconds=wait_seconds, automatic=automatic),
             "courses": courses(),
+            "login": backend.login_status(),
         }
     if command == "select_course":
         course = backend.select_course(str(payload.get("query", "")))

@@ -477,6 +477,28 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(backend.token, "test-token")
             self.assertEqual(backend.user_id, 456)
 
+    def test_browser_login_exposes_safe_account_greeting_and_persists_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend = self.make_backend(root)
+            cookies = [
+                {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "test-token"},
+                {"domain": ".dgut.edu.cn", "name": "USERINFO", "value": '{"userId":456,"realName":"陈同学","loginName":"20260001"}'},
+            ]
+            with (
+                patch.object(backend, "_get_ws_url", return_value="ws://test"),
+                patch.object(backend, "_cookies", return_value=cookies),
+                patch.object(backend, "_fetch_courses", return_value=[Course(101, "数据结构")]),
+            ):
+                self.assertTrue(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+            self.assertEqual(backend.login_status(), {
+                "authenticated": True, "displayName": "陈同学", "accountName": "20260001",
+                "userId": 456, "greeting": "你好，陈同学！",
+            })
+            cached = json.loads((root / "auth.json").read_text(encoding="utf-8"))
+            self.assertEqual(cached["display_name"], "陈同学")
+            self.assertEqual(cached["account_name"], "20260001")
+
     def test_expired_browser_cookie_is_not_persisted_or_retried_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
