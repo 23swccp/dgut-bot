@@ -298,8 +298,8 @@ class BackendTests(unittest.TestCase):
             request.return_value.status_code = 200
             request.return_value.text = '{"status":200,"msg":"ok"}'
             request.return_value.json.return_value = {"status": 200, "msg": "ok"}
-            with patch.object(backend, "_direct_sign_request", request):
-                self.assertTrue(backend._sign(Course(1, "系统工程"), 22, activity))
+            with patch.object(backend.sign_monitor, "direct_sign_request", request):
+                self.assertTrue(backend.sign_monitor.sign(Course(1, "系统工程"), 22, activity))
             self.assertEqual(request.call_args.args[0]["attendanceCode"], "")
             log = (Path(directory) / "签到记录.md").read_text(encoding="utf-8")
             self.assertIn("transport: direct-python", log)
@@ -317,8 +317,8 @@ class BackendTests(unittest.TestCase):
             response.status_code = 200
             response.text = '{"status":200,"newStatus":1}'
             response.json.return_value = {"status": 200, "newStatus": 1}
-            with patch.object(backend, "_direct_sign_request", return_value=response) as request:
-                self.assertTrue(backend._sign(Course(1, "测试课程"), 22, activity))
+            with patch.object(backend.sign_monitor, "direct_sign_request", return_value=response) as request:
+                self.assertTrue(backend.sign_monitor.sign(Course(1, "测试课程"), 22, activity))
             self.assertEqual(request.call_args.args[0]["attendanceCode"], "")
             self.assertEqual(request.call_args.args[0]["attendanceID"], 11)
 
@@ -329,10 +329,10 @@ class BackendTests(unittest.TestCase):
             backend.headers["Authorization"] = "verified-token"
             payload = {"attendanceID": 11, "attendanceCode": ""}
             response = Mock()
-            with patch("yxy_backend.requests.post", return_value=response) as post, patch.object(
+            with patch("dgutbot.domain.sign_monitor.requests.post", return_value=response) as post, patch.object(
                 backend.api, "request",
             ) as browser_request:
-                self.assertIs(backend._direct_sign_request(payload), response)
+                self.assertIs(backend.sign_monitor.direct_sign_request(payload), response)
             browser_request.assert_not_called()
             self.assertEqual(post.call_args.args[0], "https://application.dgut.edu.cn/classroomapi/newAttendance/signByStu")
             self.assertEqual(post.call_args.kwargs["json"], payload)
@@ -367,8 +367,8 @@ class BackendTests(unittest.TestCase):
             response.status_code = 200
             response.text = '{"newStatus":0,"status":209}'
             response.json.return_value = {"newStatus": 0, "status": 209}
-            with patch.object(backend, "_direct_sign_request", return_value=response):
-                self.assertTrue(backend._sign(Course(1, "系统工程"), 22, activity))
+            with patch.object(backend.sign_monitor, "direct_sign_request", return_value=response):
+                self.assertTrue(backend.sign_monitor.sign(Course(1, "系统工程"), 22, activity))
 
     def test_poll_accepts_active_numeric_sign_with_zero_state(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -378,10 +378,10 @@ class BackendTests(unittest.TestCase):
             activity = Activity.from_api({
                 "relationId": 11, "relationType": 1, "scoreType": 2, "state": 0, "status": 0,
             })
-            with patch.object(backend, "_classrooms", return_value=[classroom]), patch.object(
-                backend, "_activities", return_value=[activity],
-            ), patch.object(backend, "_sign", return_value=False) as sign:
-                self.assertEqual(backend._poll_once(set()), "已处理 1 个签到活动")
+            with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
+                backend.sign_monitor, "activities", return_value=[activity],
+            ), patch.object(backend.sign_monitor, "sign", return_value=False) as sign:
+                self.assertEqual(backend.sign_monitor.poll_once(set()), "已处理 1 个签到活动")
             sign.assert_called_once()
 
     def test_poll_uses_begin_time_when_reused_classroom_title_has_old_date(self):
@@ -396,10 +396,10 @@ class BackendTests(unittest.TestCase):
             activity = Activity.from_api({
                 "relationId": 11, "relationType": 1, "scoreType": 2, "state": 1, "status": 0,
             })
-            with patch.object(backend, "_classrooms", return_value=[classroom]), patch.object(
-                backend, "_activities", return_value=[activity],
-            ), patch.object(backend, "_sign", return_value=False) as sign:
-                self.assertEqual(backend._poll_once(set()), "已处理 1 个签到活动")
+            with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
+                backend.sign_monitor, "activities", return_value=[activity],
+            ), patch.object(backend.sign_monitor, "sign", return_value=False) as sign:
+                self.assertEqual(backend.sign_monitor.poll_once(set()), "已处理 1 个签到活动")
             sign.assert_called_once_with(backend.selected_course, 22, activity)
 
     def test_poll_does_not_trust_title_when_begin_time_is_from_another_day(self):
@@ -411,10 +411,10 @@ class BackendTests(unittest.TestCase):
                 "title": datetime.now().strftime("%m-%d"),
                 "beginTime": int(datetime.now().timestamp() * 1000) - 86_400_000,
             })
-            with patch.object(backend, "_classrooms", return_value=[classroom]), patch.object(
-                backend, "_activities",
+            with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
+                backend.sign_monitor, "activities",
             ) as activities:
-                self.assertEqual(backend._poll_once(set()), "今日暂无课堂")
+                self.assertEqual(backend.sign_monitor.poll_once(set()), "今日暂无课堂")
             activities.assert_not_called()
 
     def test_browser_launch_uses_debug_mode_and_opens_requested_url(self):
@@ -648,7 +648,7 @@ class BackendTests(unittest.TestCase):
                 entered.set()
                 backend.stop_event.wait(1)
 
-            with patch.object(backend, "_poll_once", side_effect=poll_once) as poll:
+            with patch.object(backend.sign_monitor, "poll_once", side_effect=poll_once) as poll:
                 self.assertTrue(backend.start_monitor())
                 self.assertTrue(entered.wait(1))
                 first_thread = backend.monitor_thread

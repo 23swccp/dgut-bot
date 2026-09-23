@@ -12,7 +12,6 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from enum import Enum
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable
@@ -28,10 +27,10 @@ from dgutbot.app.browser_paths import (
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
+from dgutbot.domain.sign_monitor import (
+    LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
+)
 
-
-LMS_BASE = "https://lms.dgut.edu.cn/courseapi"
-APP_BASE = "https://application.dgut.edu.cn/classroomapi"
 
 
 @dataclass
@@ -134,38 +133,6 @@ class Course:
     @classmethod
     def from_api(cls, data: dict) -> "Course":
         return cls(id=int(data["id"]), name=data.get("name", "未命名课程"), teacher_name=data.get("teacherName", "未知教师"), raw=data)
-
-
-@dataclass(frozen=True)
-class Classroom:
-    id: int
-    title: str
-    raw: dict = field(default_factory=dict, compare=False, repr=False)
-
-    @classmethod
-    def from_api(cls, data: dict) -> "Classroom":
-        return cls(id=int(data["id"]), title=data.get("title", "未命名课堂"), raw=data)
-
-
-@dataclass(frozen=True)
-class Activity:
-    relation_id: int
-    title: str
-    relation_type: int | None
-    score_type: int | None
-    state: int | None
-    status: int | None
-    raw: dict = field(default_factory=dict, compare=False, repr=False)
-
-    @classmethod
-    def from_api(cls, data: dict) -> "Activity":
-        return cls(relation_id=int(data["relationId"]), title=data.get("title", "未命名活动"), relation_type=data.get("relationType"), score_type=data.get("scoreType"), state=data.get("state"), status=data.get("status"), raw=data)
-
-
-class MonitorState(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    STOPPED = "stopped"
 
 
 @dataclass(frozen=True)
@@ -498,16 +465,7 @@ class SignBackend:
         self.user_id: int | None = cached_user_id if isinstance(cached_user_id, int) else USER_ID
         self.courses: list[Course] = []
         self.selected_course: Course | None = None
-        self.stop_event = threading.Event()
         self.browser_start_lock = threading.Lock()
-        self.monitor_lock = threading.Lock()
-        self.monitor_thread: threading.Thread | None = None
-        self.monitor_state = MonitorState.IDLE
-        self.monitor_round = 0
-        self.monitor_interval = max(2, int(self.config.poll_interval))
-        self.monitor_started_at = ""
-        self.monitor_last_check = ""
-        self.monitor_last_result = "等待首次检查"
         # 远端课程/签到请求只从这里读取 Authorization；其余网络请求头均由
         # Chromium 根据 LMS 页面上下文生成。User-Agent 仅供登录恢复/AI 兼容层使用。
         self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -515,6 +473,15 @@ class SignBackend:
             self.headers["Authorization"] = self.token
         self._rejected_browser_token = ""
         self.api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        self.sign_monitor = SignMonitor(
+            request=self._request,
+            selected_course=lambda: self.selected_course,
+            settings=lambda: self.config,
+            token=lambda: str(self.headers.get("Authorization") or self.token or ""),
+            user_id=lambda: self.user_id,
+            log=self._log,
+            write_log=self._write_sign_log,
+        )
         self._course_controller = None
         self._course_operation_lock = threading.RLock()
         self._course_reservation_lock = threading.Lock()
@@ -1357,41 +1324,6 @@ class SignBackend:
     def _request(self, method: str, url: str, **kwargs) -> BrowserResponse:
         return self.api.request(method, url, **kwargs)
 
-    def _classrooms(self, course_id: int) -> list[Classroom]:
-        response = self._request("GET", f"{LMS_BASE}/wisdomClassroom/student/getClassroomList", params={"ocId": course_id, "status": "", "pageNum": 1, "pageSize": 10, "order": 0, "lang": "zh"})
-        data = response.json()
-        raw_classrooms = data.get("result", {}).get("list", []) if data.get("code") == 1 else []
-        return [Classroom.from_api(classroom) for classroom in raw_classrooms]
-
-    def _activities(self, classroom_id: int) -> list[Activity]:
-        response = self._request("GET", f"{APP_BASE}/wisdomClassroom/student/classroomActivitys", params={"classroomId": classroom_id, "pageNum": 1, "pageSize": 999})
-        data = response.json()
-        raw_activities = data.get("result", {}).get("list", []) if data.get("code") == 1 else []
-        return [Activity.from_api(activity) for activity in raw_activities]
-
-    @staticmethod
-    def _classroom_is_today(classroom: Classroom, now: datetime | None = None) -> bool:
-        """优先使用课堂开始时间；旧接口缺少时间时才兼容标题日期。"""
-        current = now or datetime.now()
-        classroom_raw = getattr(classroom, "raw", {})
-        raw = classroom_raw if isinstance(classroom_raw, dict) else {}
-        begin_time = raw.get("beginTime")
-        try:
-            milliseconds = float(begin_time)
-            if math.isfinite(milliseconds):
-                return datetime.fromtimestamp(milliseconds / 1000).date() == current.date()
-        except (OSError, OverflowError, TypeError, ValueError):
-            pass
-        return current.strftime("%m-%d") in classroom.title
-
-    @staticmethod
-    def _kind(score_type: int | None) -> str:
-        return {0: "选人点名", 1: "二维码签到", 2: "数字码签到", 3: "一键签到"}.get(score_type, "未知签到")
-
-    @staticmethod
-    def _attendance_code(activity: Activity) -> str:
-        return next((str(activity.raw[key]) for key in ("attendanceCode", "code", "codeStr", "signCode", "checkInCode") if activity.raw.get(key)), "")
-
     def _write_sign_log(self, course: str, kind: str, details: list[str]) -> None:
         if not self.config.save_log:
             return
@@ -1416,181 +1348,48 @@ class SignBackend:
             text = re.sub(pattern, lambda match: f"{match.group(1)}{match.group(2) if match.lastindex and match.lastindex >= 3 else ''}[已隐藏]", text)
         return text
 
-    def _direct_sign_request(self, payload: dict) -> requests.Response:
-        """复刻 2026-06-17 已验证的一次性脚本，直接提交签到请求。"""
-        token = str(self.headers.get("Authorization") or self.token or "").strip()
-        if not token:
-            raise RuntimeError("缺少 Authorization，无法直接提交签到")
-        # 2026-09-22 Reqable 抓到官方 Android 应用的 signByStu POST。
-        # 仅复用公开的请求上下文；Authorization 仍取自当前已验证的登录会话。
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 5 Build/TP1A.221005.002; wv) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
-            "Chrome/150.0.7871.46 Mobile Safari/537.36 umoocApp umoocApp -language-zh",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN",
-            "Content-Type": "application/json;charset=UTF-8",
-            "sec-ch-ua-platform": '"Android"',
-            "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Android WebView";v="150"',
-            "sec-ch-ua-mobile": "?1",
-            "Origin": "https://lms.dgut.edu.cn",
-            "Referer": "https://lms.dgut.edu.cn/",
-            "X-Requested-With": "cn.ulearning.yxy",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "Authorization": token,
-        }
-        return requests.post(
-            f"{APP_BASE}/newAttendance/signByStu",
-            json=payload,
-            headers=headers,
-            timeout=15,
-        )
+    @property
+    def stop_event(self) -> threading.Event:
+        return self.sign_monitor.stop_event
 
-    def _sign(self, course: Course, classroom_id: int, activity: Activity) -> bool:
-        score_type = activity.score_type
-        kind = self._kind(score_type)
-        activity_id = activity.relation_id
-        code = self._attendance_code(activity) if score_type == 1 else ""
-        if score_type not in (1, 2, 3):
-            self._log(f"[{course.name}] {kind}：当前类型不支持自动处理，已跳过", "warn")
-            self._write_sign_log(course.name, kind, [f"attendanceID: {activity_id}", "result: skipped", "reason: unsupported scoreType"])
-            return True
-        payload = {"attendanceID": activity_id, "classID": classroom_id, "userID": self.user_id, "location": f"{self.config.lat},{self.config.lng}", "address": self.config.address, "enterWay": 1, "attendanceCode": code}
-        http_status: int | str = "exception"
-        raw_response = ""
-        try:
-            response = self._direct_sign_request(payload)
-            http_status = response.status_code
-            raw_response = response.text
-            try:
-                result = response.json()
-            except (requests.JSONDecodeError, ValueError):
-                result = {}
-            status = result.get("status")
-            if isinstance(status, str) and status.isdigit():
-                status = int(status)
-            message = result.get("msg", result.get("message", raw_response or f"HTTP {http_status}"))
-        except Exception as error:
-            status, message = "exception", str(error)
-            raw_response = str(error)
-        if status == 200:
-            self._log(f"✓ [{course.name}] {kind}：签到成功", "success")
-        elif status in (201, 209):
-            self._log(f"• [{course.name}] {kind}：已签到过", "muted")
-        else:
-            self._log(f"× [{course.name}] {kind}：{message}", "warn")
-        self._write_sign_log(course.name, kind, [
-            "transport: direct-python",
-            f"endpoint: {APP_BASE}/newAttendance/signByStu",
-            f"request: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
-            f"HTTP: {http_status}",
-            f"serviceStatus: {status}",
-            f"rawResponse: {raw_response}",
-        ])
-        return status in (200, 201, 209)
+    @property
+    def monitor_lock(self) -> threading.Lock:
+        return self.sign_monitor.lock
 
-    def _poll_once(self, checked: set[str]) -> str:
-        course = self.selected_course
-        if course is None:
-            self._log("尚未选择课程，轮询已跳过。", "warn")
-            return "尚未选择课程"
-        now = datetime.now()
-        classrooms = [item for item in self._classrooms(course.id) if self._classroom_is_today(item, now)]
-        if not classrooms:
-            self._log(f"[{course.name}] 本轮完成：今天没有课堂，无需签到。", "muted")
-            return "今日暂无课堂"
-        active_count = 0
-        new_count = 0
-        for classroom in classrooms:
-            for activity in self._activities(classroom.id):
-                # 学校接口目前会把已开始的数字码签到返回为 state=0；旧数据中
-                # 也存在 state=1。status=0 才是仍可处理的关键条件。
-                if activity.relation_type != 1 or activity.state not in (0, 1) or activity.status != 0:
-                    continue
-                active_count += 1
-                key = f"{activity.relation_id}_{classroom.id}"
-                if key in checked:
-                    continue
-                new_count += 1
-                self._log(f"[{course.name}] 发现 {self._kind(activity.score_type)}，正在处理…", "info")
-                if self._sign(course, classroom.id, activity):
-                    checked.add(key)
-        if active_count == 0:
-            self._log(f"[{course.name}] 本轮完成：未发现进行中的签到。", "muted")
-            return "未发现进行中的签到"
-        elif new_count == 0:
-            self._log(f"[{course.name}] 本轮完成：签到活动已处理，继续等待。", "muted")
-            return "签到活动已处理"
-        return f"已处理 {new_count} 个签到活动"
+    @property
+    def monitor_thread(self) -> threading.Thread | None:
+        return self.sign_monitor.thread
+
+    @property
+    def monitor_state(self) -> MonitorState:
+        return self.sign_monitor.state
+
+    @property
+    def monitor_round(self) -> int:
+        return self.sign_monitor.round
+
+    @property
+    def monitor_interval(self) -> int:
+        return self.sign_monitor.interval
+
+    @property
+    def monitor_started_at(self) -> str:
+        return self.sign_monitor.started_at
+
+    @property
+    def monitor_last_check(self) -> str:
+        return self.sign_monitor.last_check
+
+    @property
+    def monitor_last_result(self) -> str:
+        return self.sign_monitor.last_result
 
     def sign_monitor_status(self) -> dict[str, Any]:
         """返回供前端原地刷新的轻量状态，避免把每轮检查打印成日志。"""
-        with self.monitor_lock:
-            running = self.monitor_thread is not None and self.monitor_thread.is_alive()
-            return {
-                "running": running,
-                "state": self.monitor_state.value,
-                "courseName": self.selected_course.name if self.selected_course else "",
-                "intervalSeconds": self.monitor_interval,
-                "round": self.monitor_round,
-                "startedAt": self.monitor_started_at,
-                "lastCheck": self.monitor_last_check,
-                "lastResult": self.monitor_last_result,
-            }
+        return self.sign_monitor.status()
 
     def start_monitor(self) -> bool:
-        with self.monitor_lock:
-            if self.monitor_thread is not None and self.monitor_thread.is_alive():
-                self._log("签到监测已在运行，无需重复启动。", "muted")
-                return False
-            self.stop_event.clear()
-            self.monitor_state = MonitorState.RUNNING
-            self.monitor_round = 0
-            self.monitor_interval = max(2, int(self.config.poll_interval))
-            self.monitor_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
-            self.monitor_last_check = ""
-            self.monitor_last_result = "等待首次检查"
-            self.monitor_thread = threading.Thread(
-                target=self._monitor,
-                name="sign-monitor",
-                daemon=True,
-            )
-            self.monitor_thread.start()
-            return True
+        return self.sign_monitor.start()
 
     def stop_monitor(self) -> None:
-        self.stop_event.set()
-        with self.monitor_lock:
-            if self.monitor_thread is not None and self.monitor_thread.is_alive():
-                self.monitor_state = MonitorState.STOPPED
-
-    def _monitor(self) -> None:
-        try:
-            checked: set[str] = set()
-            interval = self.monitor_interval
-            self._log(f"开始轮询，每 {interval} 秒检查一次。", "success")
-            round_number = 0
-            while not self.stop_event.is_set():
-                round_number += 1
-                try:
-                    course_name = self.selected_course.name if self.selected_course else "未选择课程"
-                    self._log(f"第 {round_number} 轮：正在检查《{course_name}》…", "info")
-                    result = self._poll_once(checked)
-                    with self.monitor_lock:
-                        self.monitor_round = round_number
-                        self.monitor_last_check = datetime.now().astimezone().isoformat(timespec="seconds")
-                        self.monitor_last_result = result
-                except Exception as error:
-                    with self.monitor_lock:
-                        self.monitor_round = round_number
-                        self.monitor_last_check = datetime.now().astimezone().isoformat(timespec="seconds")
-                        self.monitor_last_result = "检查失败"
-                    self._log(f"轮询出错：{error}", "warn")
-                self.stop_event.wait(interval)
-        finally:
-            with self.monitor_lock:
-                self.monitor_state = MonitorState.IDLE
-                if self.monitor_thread is threading.current_thread():
-                    self.monitor_thread = None
+        self.sign_monitor.stop()
