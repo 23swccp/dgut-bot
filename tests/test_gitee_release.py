@@ -1,6 +1,7 @@
+import subprocess
 from pathlib import Path
 
-from scripts.publish_gitee_release import DEFAULT_ASSET_NAME, publish_release
+from scripts.publish_gitee_release import DEFAULT_ASSET_NAME, _curl_upload, publish_release
 
 
 class FakeResponse:
@@ -125,3 +126,22 @@ def test_replaces_same_named_attachment(tmp_path):
 
     assert [call[0] for call in session.calls] == ["GET", "GET", "DELETE", "POST"]
     assert session.calls[2][1].endswith("/attach_files/34")
+
+
+def test_curl_upload_uses_configured_timeout_without_exposing_token(tmp_path, monkeypatch):
+    asset = tmp_path / "Setup.exe"
+    asset.write_bytes(b"installer")
+    monkeypatch.setenv("GITEE_UPLOAD_MAX_TIME", "3600")
+
+    def fake_run(args, **kwargs):
+        assert args[args.index("--max-time") + 1] == "3600"
+        assert "secret" not in " ".join(args)
+        assert "Authorization: Bearer secret" in kwargs["input"]
+        Path(args[args.index("--output") + 1]).write_text(
+            '{"browser_download_url":"https://example/setup.exe"}', encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, stdout="HTTP 201", stderr="")
+
+    monkeypatch.setattr("scripts.publish_gitee_release.subprocess.run", fake_run)
+    result = _curl_upload("https://example/upload", "secret", asset, DEFAULT_ASSET_NAME)
+    assert result["browser_download_url"] == "https://example/setup.exe"

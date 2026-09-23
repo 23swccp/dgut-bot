@@ -44,15 +44,21 @@ def _curl_upload(url: str, token: str, asset: Path, asset_name: str) -> Any:
     """Stream the unchanged installer; keep authorization off argv and disk."""
     if any(char in token for char in "\r\n"):
         raise GiteeReleaseError("Invalid credential format")
+    try:
+        max_time = int(os.getenv("GITEE_UPLOAD_MAX_TIME", "180"))
+    except ValueError as exc:
+        raise GiteeReleaseError("GITEE_UPLOAD_MAX_TIME must be an integer") from exc
+    if not 60 <= max_time <= 7200:
+        raise GiteeReleaseError("GITEE_UPLOAD_MAX_TIME must be between 60 and 7200 seconds")
     escaped = token.replace("\\", "\\\\").replace('"', '\\"')
     config = f'header = "Authorization: Bearer {escaped}"\n'
     with tempfile.TemporaryDirectory(prefix="gitee-upload-") as directory:
         body = Path(directory) / "response.json"
-        print(f"Uploading {asset.stat().st_size} bytes with curl (180-second total limit).", flush=True)
+        print(f"Uploading {asset.stat().st_size} bytes with curl ({max_time}-second total limit).", flush=True)
         result = subprocess.run([
             "curl", "-q", "--config", "-", "--http1.1", "--silent", "--show-error",
             "--fail-with-body", "--header", "Expect: 100-continue", "--expect100-timeout", "10",
-            "--connect-timeout", "20", "--max-time", "180", "--speed-limit", "1024", "--speed-time", "45",
+            "--connect-timeout", "20", "--max-time", str(max_time), "--speed-limit", "1024", "--speed-time", "45",
             "--header", "Accept: application/json", "--user-agent", "dgut-bot-release-workflow",
             "--form", f"file=@{asset.resolve()};filename={asset_name};type=application/vnd.microsoft.portable-executable",
             "--output", str(body), "--write-out", "HTTP %{http_code}; uploaded %{size_upload} bytes; speed %{speed_upload} B/s\n", url,

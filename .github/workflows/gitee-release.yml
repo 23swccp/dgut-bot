@@ -41,6 +41,7 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_UPLOAD_TRANSPORT: curl
+          GITEE_UPLOAD_MAX_TIME: "3600"
           GITEE_OWNER: swccq23
           GITEE_REPO: dgut-bot
           GITEE_TAG: ${{ inputs.tag }}
