@@ -21,7 +21,7 @@ def resource_root() -> Path:
     """只读内置资源目录：冻结后为 PyInstaller 解包目录，开发时为源码目录。"""
     if is_frozen():
         return Path(getattr(sys, "_MEIPASS")).resolve()
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[4]
 
 
 def data_root() -> Path:
@@ -33,12 +33,12 @@ def data_root() -> Path:
         local = os.environ.get("LOCALAPPDATA", "").strip()
         base = Path(local) if local else Path.home() / "AppData" / "Local"
         return (base / "DgutBot" / "data").resolve()
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[4]
 
 
 def frontend_dist() -> Path:
     """前端是随版本替换的只读资源，始终从 PyInstaller 资源目录读取。"""
-    return resource_root() / "web" / "dist"
+    return resource_root() / "frontend" / "dist"
 
 
 def agent_runtime_root() -> Path:

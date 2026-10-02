@@ -7,7 +7,7 @@
 验证项：
 1. 从发行目录直接启动 dgut-bot.exe（无源码参与）。
 2. 本地后端服务在 127.0.0.1:8765 就绪。
-3. 首页 HTML 可加载；web/dist 的 JS/CSS 正常返回。
+3. 首页 HTML 可加载；frontend/dist 的 JS/CSS 正常返回。
 4. 前后端 API 可通信（get_app_info/get_settings）。
 5. 能检测到 Edge 或 Chrome。
 6. 配置写入独立用户数据目录，不进入 Velopack current。
@@ -180,8 +180,8 @@ def main(argv: list[str]) -> int:
     check(cli.is_file(), "dgutctl.exe 存在")
     check(pe_subsystem(exe) == 2 and pe_subsystem(cli) == 3, "主程序按需创建终端，CLI 为 console 程序")
     check((release_dir / "_internal").is_dir(), "_internal 资源目录存在")
-    index = release_dir / "_internal" / "web" / "dist" / "index.html"
-    check(index.is_file(), "web/dist/index.html 存在")
+    index = release_dir / "_internal" / "frontend" / "dist" / "index.html"
+    check(index.is_file(), "frontend/dist/index.html 存在")
 
     check(not port_open(8765), "验证端口未被其他服务占用")
     try:
@@ -201,10 +201,10 @@ def main(argv: list[str]) -> int:
         status, body, _headers = http_get("/")
         check(status == 200 and b'id="root"' in body, "首页 HTML 可加载")
 
-        assets = sorted((release_dir / "_internal" / "web" / "dist" / "assets").iterdir())
+        assets = sorted((release_dir / "_internal" / "frontend" / "dist" / "assets").iterdir())
         js = next((a for a in assets if a.suffix == ".js"), None)
         css = next((a for a in assets if a.suffix == ".css"), None)
-        check(js is not None and css is not None, "web/dist 存在 JS 与 CSS 资源")
+        check(js is not None and css is not None, "frontend/dist 存在 JS 与 CSS 资源")
         for asset in (js, css):
             status, _body, headers = http_get(f"/assets/{asset.name}")
             content_type = headers.get("Content-Type", "")

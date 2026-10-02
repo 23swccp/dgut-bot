@@ -3,6 +3,7 @@ browser_profile/
 config.json
 auth.json
 account.json
+independent_account.json
 签到记录.md
 browser-launcher.log
 browser-service.log
@@ -15,8 +16,8 @@ __pycache__/
 *.py[cod]
 
 # 前端生成文件
-web/node_modules/
-web/dist/
+frontend/node_modules/
+frontend/dist/
 
 # 自动更新运行数据
 .update/

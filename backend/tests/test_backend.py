@@ -9,7 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from dgutbot.domain.yxy_backend import Activity, AppConfig, BrowserApiClient, Classroom, Course, MonitorState, SignBackend
+from dgutbot.domain.yxy_backend import Activity, AppConfig, BrowserApiClient, BrowserLoginRedirectError, Classroom, Course, MonitorState, SignBackend
+from dgutbot.domain.independent_login import LOGIN_URL, login_headers
 from dgutbot.app.backend_commands import EventBuffer
 from dgutbot.app.browser_paths import registered_browser_paths
 
@@ -155,6 +156,44 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(json.loads(request["body"]), {"attendanceID": 12})
         self.assertNotIn("secret-token", call["params"]["functionDeclaration"])
 
+    def test_browser_api_wakes_frozen_background_page_before_each_fetch(self):
+        client = BrowserApiClient(lambda: 9222, {}, auto_create=False)
+        target = {"id": "school", "webSocketDebuggerUrl": "ws://school"}
+        frozen = True
+        calls = []
+
+        def protocol(method, params, **_kwargs):
+            nonlocal frozen
+            calls.append(method)
+            if method == "Page.setWebLifecycleState":
+                self.assertEqual(params, {"state": "active"})
+                frozen = False
+                return {}
+            if method == "Runtime.evaluate":
+                self.assertFalse(frozen)
+                return {"result": {"objectId": "window-1"}}
+            self.assertEqual(method, "Runtime.callFunctionOn")
+            self.assertFalse(frozen)
+            frozen = True  # 模拟下一次轮询前又被浏览器冻结。
+            return {"result": {"value": {"status": 200, "text": '{"code":1}'}}}
+
+        with patch.object(client, "_discover_target", return_value=target), patch.object(
+            client, "_connect",
+        ), patch.object(client, "_call", side_effect=protocol):
+            for _ in range(2):
+                self.assertEqual(client.request("GET", "https://lms.dgut.edu.cn/courseapi/test").json(), {"code": 1})
+        self.assertEqual(calls, ["Page.setWebLifecycleState", "Runtime.evaluate", "Runtime.callFunctionOn"] * 2)
+
+    def test_browser_api_reports_wake_failure_without_attempting_fetch(self):
+        client = BrowserApiClient(lambda: 9222, {}, auto_create=False)
+        with patch.object(client, "_discover_target", return_value={"id": "school"}), patch.object(
+            client, "_connect",
+        ), patch.object(client, "_call", side_effect=RuntimeError("浏览器拒绝执行请求")) as protocol:
+            with self.assertRaisesRegex(RuntimeError, "浏览器拒绝"):
+                client.request("GET", "https://lms.dgut.edu.cn/courseapi/test")
+        self.assertEqual(protocol.call_args.args[0], "Page.setWebLifecycleState")
+        protocol.assert_called_once()
+
     def test_browser_api_requires_an_lms_origin_page(self):
         discovery = Mock()
         discovery.raise_for_status.return_value = None
@@ -286,6 +325,57 @@ class BackendTests(unittest.TestCase):
         activity = Activity.from_api({"relationId": 1, "scoreType": 3, "custom": "kept"})
         self.assertEqual(activity.score_type, 3)
         self.assertEqual(activity.raw["custom"], "kept")
+
+    def test_location_sign_submits_configured_position_and_records_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.user_id = 7
+            backend.config.lat = 22.5
+            backend.config.lng = 113.5
+            backend.config.address = "测试地点"
+            activity = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 0, "state": 0, "status": 0,
+            })
+            response = Mock()
+            response.status_code = 200
+            response.text = '{"status":400,"msg":"超出签到范围"}'
+            response.json.return_value = {"status": 400, "msg": "超出签到范围"}
+            with patch.object(backend.sign_monitor, "direct_sign_request", return_value=response) as request:
+                self.assertFalse(backend.sign_monitor.sign(Course(1, "测试课程"), 22, activity))
+            payload = request.call_args.args[0]
+            self.assertEqual(payload["location"], "22.5,113.5")
+            self.assertEqual(payload["address"], "测试地点")
+            self.assertEqual(payload["attendanceCode"], "")
+            log = (Path(directory) / "签到记录.md").read_text(encoding="utf-8")
+            self.assertIn("位置签到", log)
+            self.assertIn("serviceStatus: 400", log)
+            self.assertNotIn("result: skipped", log)
+
+    def test_poll_signs_location_attendance_but_ignores_selection_activity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.user_id = 7
+            backend.selected_course = Course(1, "测试课程")
+            classroom = Classroom.from_api({"id": 22, "beginTime": int(datetime.now().timestamp() * 1000)})
+            location = Activity.from_api({
+                "relationId": 11, "relationType": 1, "scoreType": 0, "state": 0, "status": 0,
+            })
+            selection = Activity.from_api({
+                "relationId": 12, "relationType": 10, "scoreType": 0, "state": 0, "status": 0,
+            })
+            response = Mock()
+            response.status_code = 200
+            response.text = '{"status":200,"newStatus":1}'
+            response.json.return_value = {"status": 200, "newStatus": 1}
+            checked = set()
+            with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
+                backend.sign_monitor, "activities", return_value=[selection, location],
+            ), patch.object(backend.sign_monitor, "direct_sign_request", return_value=response) as request:
+                self.assertEqual(backend.sign_monitor.poll_once(checked), "签到成功，已停止监测")
+                self.assertEqual(backend.sign_monitor.poll_once(checked), "签到活动已处理")
+            request.assert_called_once()
+            self.assertEqual(request.call_args.args[0]["attendanceID"], 11)
+            self.assertEqual(checked, {"11_22"})
 
     def test_numeric_sign_submits_without_attendance_code(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -507,7 +597,7 @@ class BackendTests(unittest.TestCase):
             cookies = [
                 {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "expired-token"},
             ]
-            fetch = Mock(side_effect=RuntimeError("浏览器请求失败：TypeError"))
+            fetch = Mock(side_effect=BrowserLoginRedirectError("学校接口发生登录重定向"))
             with (
                 patch.object(backend, "_get_ws_url", return_value="ws://test"),
                 patch.object(backend, "_cookies", return_value=cookies),
@@ -522,6 +612,66 @@ class BackendTests(unittest.TestCase):
             self.assertFalse((root / "auth.json").exists())
             self.assertFalse(any("登录信息读取成功" in text for text, _kind in messages))
             self.assertFalse(any("已更新本地应用登录缓存" in text for text, _kind in messages))
+
+    def test_saved_credentials_survive_network_failure_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend = self.make_backend(root)
+            backend._apply_token("cached-token", 456, display_name="同学")
+            original = (root / "auth.json").read_bytes()
+            restarted = self.make_backend(root)
+            with patch.object(restarted, "_fetch_courses", side_effect=RuntimeError("浏览器请求失败：TypeError")):
+                self.assertFalse(restarted.load_saved_courses())
+            self.assertEqual((root / "auth.json").read_bytes(), original)
+            self.assertEqual(restarted.headers["Authorization"], "cached-token")
+            with patch.object(restarted, "_fetch_courses", return_value=[Course(101, "课程")]):
+                self.assertTrue(restarted.load_saved_courses())
+
+    def test_rejected_different_browser_cookie_preserves_saved_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend = self.make_backend(root)
+            backend._apply_token("cached-token", 456, display_name="同学")
+            original = (root / "auth.json").read_bytes()
+            cookies = [{"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "expired-token"}]
+            with (
+                patch.object(backend, "_get_ws_url", return_value="ws://test"),
+                patch.object(backend, "_cookies", return_value=cookies),
+                patch.object(backend, "_fetch_courses", side_effect=RuntimeError("浏览器请求返回 HTTP 401")) as fetch,
+            ):
+                self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+                self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(backend.token, "cached-token")
+            self.assertEqual(backend.headers["Authorization"], "cached-token")
+            self.assertEqual(backend.display_name, "同学")
+            self.assertEqual((root / "auth.json").read_bytes(), original)
+
+    def test_transient_browser_cookie_failure_can_be_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            cookies = [{"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "valid-token"}]
+            with (
+                patch.object(backend, "_get_ws_url", return_value="ws://test"),
+                patch.object(backend, "_cookies", return_value=cookies),
+                patch.object(backend, "_fetch_courses", side_effect=[RuntimeError("浏览器请求失败：TypeError"), [Course(101, "课程")]]),
+            ):
+                self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+                self.assertTrue(backend.load_session_and_courses(wait_seconds=1, automatic=True))
+            self.assertEqual(backend.token, "valid-token")
+
+    def test_browser_redirect_and_network_error_are_distinguished(self):
+        for value, expected in [({"loginRedirect": True}, BrowserLoginRedirectError), ({"transportError": "TypeError"}, RuntimeError)]:
+            with self.subTest(value=value):
+                client = BrowserApiClient(lambda: 9222, {})
+                def protocol(method, _params, **_kwargs):
+                    if method == "Runtime.evaluate":
+                        return {"result": {"objectId": "window-1"}}
+                    return {"result": {"value": value}}
+                with patch.object(client, "_discover_target", return_value={"id": "school"}), patch.object(client, "_connect"), patch.object(client, "_call", side_effect=protocol):
+                    with self.assertRaises(expected) as caught:
+                        client.request("GET", "https://lms.dgut.edu.cn/courseapi/test")
+                self.assertEqual(SignBackend._is_login_rejected(caught.exception), bool(value.get("loginRedirect")))
 
     def test_browser_detection_reports_paths_and_prefers_edge(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -660,6 +810,48 @@ class BackendTests(unittest.TestCase):
             self.assertTrue(backend.update_account_login("", "", False))
             self.assertFalse((root / "account.json").exists())
 
+    def test_optional_account_relogin_uses_current_school_route_and_applies_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend = self.make_backend(root)
+            self.assertTrue(backend.update_account_login("20260001", "test-password", True))
+            response = Mock(status_code=302)
+            response.cookies = {"AUTHORIZATION": "relogin-token"}
+            response.headers = {"Set-Cookie": "AUTHORIZATION=relogin-token"}
+            with patch("dgutbot.domain.yxy_backend.requests.post", return_value=response) as post:
+                self.assertTrue(backend._relogin_with_account())
+            self.assertEqual(post.call_args.args[0], LOGIN_URL)
+            self.assertEqual(post.call_args.args[0], "https://lms.dgut.edu.cn/courseapi/users/login/v2")
+            self.assertEqual(post.call_args.kwargs["data"], {"loginName": "20260001", "password": "test-password"})
+            self.assertNotIn("alias", post.call_args.kwargs["data"])
+            self.assertEqual(post.call_args.kwargs["headers"], login_headers())
+            self.assertIs(post.call_args.kwargs["allow_redirects"], False)
+            self.assertEqual(backend.token, "relogin-token")
+            self.assertEqual(backend.headers["Authorization"], "relogin-token")
+            self.assertTrue((root / "auth.json").is_file())
+
+    def test_optional_account_relogin_without_credential_keeps_state_and_reports_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend = self.make_backend(root)
+            backend.token = "existing-token"
+            self.assertTrue(backend.update_account_login("20260001", "test-password", True))
+            response = Mock(status_code=302)
+            response.cookies = {}
+            response.headers = {}
+            with patch("dgutbot.domain.yxy_backend.requests.post", return_value=response):
+                self.assertFalse(backend._relogin_with_account())
+            self.assertEqual(backend.token, "existing-token")
+            response.status_code = 500
+            with patch("dgutbot.domain.yxy_backend.requests.post", return_value=response):
+                self.assertFalse(backend._relogin_with_account())
+            self.assertEqual(backend.token, "existing-token")
+            self.assertTrue(backend.update_account_login("", "", False))
+            self.assertFalse((root / "account.json").exists())
+            with patch("dgutbot.domain.yxy_backend.requests.post") as post:
+                self.assertFalse(backend._relogin_with_account())
+            post.assert_not_called()
+
     def test_monitor_is_single_instance_and_returns_to_idle(self):
         with tempfile.TemporaryDirectory() as directory:
             backend = self.make_backend(Path(directory))
@@ -682,6 +874,73 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(poll.call_count, 1)
             self.assertEqual(backend.monitor_state, MonitorState.IDLE)
             self.assertIsNone(backend.monitor_thread)
+
+    def test_monitor_stops_after_success_and_can_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.selected_course = Course(101, "测试课程")
+            backend.config.poll_interval = 60
+            classroom = Classroom.from_api({"id": 22, "beginTime": int(datetime.now().timestamp() * 1000)})
+            later_classroom = Classroom.from_api({"id": 23, "beginTime": int(datetime.now().timestamp() * 1000)})
+            activities = [Activity.from_api({
+                "relationId": activity_id, "relationType": 1, "scoreType": 3, "state": 0, "status": 0,
+            }) for activity_id in (11, 12)]
+            response = Mock(status_code=200, text='{"status":200,"newStatus":1}')
+            response.json.return_value = {"status": 200, "newStatus": 1}
+            entered = threading.Event()
+            release = threading.Event()
+
+            def submit(_payload):
+                entered.set()
+                self.assertTrue(release.wait(1))
+                return response
+
+            with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom, later_classroom]) as rooms, patch.object(
+                backend.sign_monitor, "activities", return_value=activities,
+            ) as fetched, patch.object(backend.sign_monitor, "direct_sign_request", side_effect=submit) as request:
+                for run in range(2):
+                    entered.clear()
+                    release.clear()
+                    self.assertTrue(backend.start_monitor())
+                    worker = backend.monitor_thread
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        self.assertFalse(backend.stop_event.is_set())
+                    finally:
+                        release.set()
+                        worker.join(1)
+                        if worker.is_alive():
+                            backend.stop_monitor()
+                            worker.join(1)
+                    self.assertFalse(worker.is_alive())
+                    self.assertTrue(backend.stop_event.is_set())
+                    status = backend.sign_monitor_status()
+                    self.assertFalse(status["running"])
+                    self.assertEqual(status["state"], "idle")
+                    self.assertEqual(status["round"], 1)
+                    self.assertEqual(status["lastResult"], "签到成功，已停止监测")
+                    self.assertEqual(request.call_count, run + 1)
+                    self.assertEqual(rooms.call_count, run + 1)
+                    self.assertEqual(fetched.call_count, run + 1)
+            self.assertTrue(all(call.args[0]["attendanceID"] == 11 for call in request.call_args_list))
+
+    def test_poll_does_not_stop_for_failed_repeated_or_unsupported_signs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.selected_course = Course(101, "测试课程")
+            classroom = Classroom.from_api({"id": 22, "beginTime": int(datetime.now().timestamp() * 1000)})
+            for score_type, service_status in ((3, 400), (3, 201), (3, 209), (99, None)):
+                with self.subTest(score_type=score_type, service_status=service_status):
+                    activity = Activity.from_api({
+                        "relationId": 11, "relationType": 1, "scoreType": score_type, "state": 0, "status": 0,
+                    })
+                    response = Mock(status_code=200, text=json.dumps({"status": service_status}))
+                    response.json.return_value = {"status": service_status}
+                    with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
+                        backend.sign_monitor, "activities", return_value=[activity],
+                    ), patch.object(backend.sign_monitor, "direct_sign_request", return_value=response):
+                        self.assertEqual(backend.sign_monitor.poll_once(set()), "已处理 1 个签到活动")
+                    self.assertFalse(backend.stop_event.is_set())
 
 
 if __name__ == "__main__":

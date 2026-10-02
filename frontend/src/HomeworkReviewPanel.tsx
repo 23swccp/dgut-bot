@@ -19,8 +19,8 @@ async function command(name: string, payload: Record<string, unknown>): Promise<
   return await response.json() as CommandResult;
 }
 
-export function HomeworkReviewPanel({ itemId, onSubmitted }: {
-  itemId: string; onSubmitted: () => void;
+export function HomeworkReviewPanel({ itemId, onSubmissionResult }: {
+  itemId: string; onSubmissionResult: (result: { good: boolean; text: string }) => void;
 }) {
   const [review, setReview] = useState<HomeworkReview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -78,12 +78,13 @@ export function HomeworkReviewPanel({ itemId, onSubmitted }: {
       }));
       const response = await command("submit_homework_reviews", { itemId, drafts });
       if (!response.ok) throw new Error(response.error || "互评提交失败");
-      const success = response.reviewSubmit?.message || `已提交 ${editable.length} 份互评`;
-      await load();
+      const success = `${review.title}：${response.reviewSubmit?.message || `已提交 ${editable.length} 份互评`}`;
       setMessage({ good: true, text: success });
-      onSubmitted();
+      onSubmissionResult({ good: true, text: success });
     } catch (error) {
-      setMessage({ good: false, text: error instanceof Error ? error.message : "互评提交失败" });
+      const failure = `${review.title}：${error instanceof Error ? error.message : "互评提交失败"}`;
+      setMessage({ good: false, text: failure });
+      onSubmissionResult({ good: false, text: failure });
     } finally { setSubmitting(false); }
   }
 
@@ -103,6 +104,6 @@ export function HomeworkReviewPanel({ itemId, onSubmitted }: {
       {!task.editable && <p className="review-locked-note">该条互评当前不允许修改。</p>}
     </article>)}
     {message && <p className={`review-message ${message.good ? "good" : "error"}`} role="status">{message.text}</p>}
-    {!loading && review && <footer><span>提交前会再次确认；若中途失败，会显示已成功提交的份数。</span><button type="button" className="primary" disabled={submitting || !review.tasks.some(task => task.editable)} onClick={() => void submitAll()}>{submitting ? "提交中…" : "一键提交"}</button></footer>}
+    {!loading && review && <footer><button type="button" className="primary" disabled={submitting || !review.tasks.some(task => task.editable)} onClick={() => void submitAll()}>{submitting ? "提交中…" : "一键提交"}</button></footer>}
   </section>;
 }

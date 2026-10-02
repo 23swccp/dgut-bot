@@ -17,7 +17,7 @@ import time
 from course_capture import Recorder, discover, select_target
 from quiz_probe import TabConnection
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SECRET = 'CAPTURE_PRIVATE_MARKER_123456789'
 
 
@@ -57,7 +57,7 @@ def run(browser):
             self.end_headers()
             self.wfile.write(raw)
 
-    server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Site, directory=str(ROOT / 'quiz_simulator')))
+    server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Site, directory=str(ROOT / 'backend' / 'quiz_simulator')))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     report = {'browser': Path(browser).name, 'checks': []}
     process = driver = recorder = None
@@ -144,7 +144,7 @@ def run(browser):
             assert not (root / 'capture/private').exists()
             report['checks'].append('reload-context-recovery; observer-cleanup; no-secret-on-disk; no-default-screenshot')
 
-            result = subprocess.run([shutil.which('python') or sys.executable, str(ROOT / 'tools/quiz_probe.py'), 'capture-course.html',
+            result = subprocess.run([shutil.which('python') or sys.executable, str(ROOT / 'backend' / 'tools' / 'quiz_probe.py'), 'capture-course.html',
                 '--port', str(port), '--once', '--output', str(root / 'cli')], capture_output=True, timeout=40)
             assert result.returncode == 0, result.stdout.decode('utf-8', errors='replace') + result.stderr.decode('utf-8', errors='replace')
             evaluate("(()=>{for(let i=0;i<150;i++)document.body.append(document.createElement('div'))})()")

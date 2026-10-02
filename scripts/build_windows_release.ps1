@@ -20,7 +20,7 @@ foreach ($name in @("build", "dist", "Releases")) {
     }
 }
 
-Push-Location (Join-Path $ProjectRoot "web")
+Push-Location (Join-Path $ProjectRoot "frontend")
 try {
     if (-not $SkipNpmInstall) { npm ci; if ($LASTEXITCODE -ne 0) { throw "npm ci failed" } }
     npm test -- --run; if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }

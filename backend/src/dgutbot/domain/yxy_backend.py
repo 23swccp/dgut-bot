@@ -29,6 +29,7 @@ from dgutbot.domain.course_scan import (
 )
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
+from dgutbot.domain.independent_login import LOGIN_URL, IndependentLogin, login_headers
 from dgutbot.domain.sign_monitor import (
     LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
 )
@@ -160,6 +161,10 @@ class BrowserResponse:
             raise ValueError("服务返回了无法解析的数据") from error
 
 
+class BrowserLoginRedirectError(RuntimeError):
+    """浏览器明确报告接口发生重定向，与网络 TypeError 分开处理。"""
+
+
 class BrowserApiClient:
     """在与目标接口同源的页面内执行 fetch，复用 Chromium 网络栈与会话。"""
 
@@ -174,11 +179,12 @@ async function(request) {
       method: request.method,
       credentials: 'include',
       headers: request.headers,
-      redirect: 'error',
+      redirect: 'manual',
       signal: controller.signal
     };
     if (request.body !== null) options.body = request.body;
     const response = await fetch(request.url, options);
+    if (response.type === 'opaqueredirect') return {loginRedirect: true};
     const text = (await response.text()).slice(0, request.maxResponseChars);
     return {
       status: response.status,
@@ -405,6 +411,9 @@ async function(request) {
             origin = f"{parts.scheme}://{parts.netloc}"
             target = self._discover_target(origin)
             self._connect(target)
+            # Edge 可冻结后台学校页；先恢复运行，否则 fetch 与超时计时器
+            # 都可能停住，最终表现为 CDP 连接超时。无需切换用户当前标签。
+            self._call("Page.setWebLifecycleState", {"state": "active"}, timeout=5)
             global_result = self._call(
                 "Runtime.evaluate", {"expression": "globalThis", "returnByValue": False}, timeout=5,
             )
@@ -427,6 +436,8 @@ async function(request) {
         value = (result.get("result") or {}).get("value")
         if not isinstance(value, dict):
             raise RuntimeError("浏览器返回了无效的请求结果")
+        if value.get("loginRedirect"):
+            raise BrowserLoginRedirectError("学校接口发生登录重定向，请重新登录")
         if value.get("transportError"):
             raise RuntimeError(f"浏览器请求失败：{value['transportError']}")
         response = BrowserResponse(
@@ -456,7 +467,7 @@ class SignBackend:
     ) -> None:
         self.emit = emit
         self.emit_event = emit_event
-        self.root = root or Path(__file__).resolve().parents[3]
+        self.root = root or Path(__file__).resolve().parents[4]
         self.config_path = self.root / "config.json"
         self.config: AppConfig = self._load_config()
         # 自动答题是一次性运行授权，不能从上一次程序会话继承。
@@ -470,6 +481,7 @@ class SignBackend:
         self.courses: list[Course] = []
         self.selected_course: Course | None = None
         self.browser_start_lock = threading.Lock()
+        self.independent_login = IndependentLogin(root=self.root)
         # 远端课程/签到请求只从这里读取 Authorization；其余网络请求头均由
         # Chromium 根据 LMS 页面上下文生成。User-Agent 仅供登录恢复/AI 兼容层使用。
         self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -1292,13 +1304,11 @@ class SignBackend:
             return False
         self._log("登录缓存已失效，正在尝试可选的账号密码重新登录…", "info")
         try:
+            # 与独立登录共用学校当前有效的登录入口；appapi/user/login/app 已不下发任何 Cookie。
             response = requests.post(
-                "https://application.dgut.edu.cn/appapi/user/login/app",
-                data={"loginName": account["username"], "password": account["password"], "alias": "application"},
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": self.headers["User-Agent"],
-                },
+                LOGIN_URL,
+                data={"loginName": account["username"], "password": account["password"]},
+                headers=login_headers(),
                 allow_redirects=False,
                 timeout=10,
             )
@@ -1330,8 +1340,7 @@ class SignBackend:
 
     @classmethod
     def _is_login_rejected(cls, error: Exception) -> bool:
-        # fetch 遇到登录重定向且 redirect='error' 时，Chromium 只返回 TypeError。
-        return cls._is_unauthorized(error) or "TypeError" in str(error)
+        return cls._is_unauthorized(error) or isinstance(error, BrowserLoginRedirectError)
 
     def load_saved_courses(self) -> bool:
         """使用本地 Token，并通过已打开的 LMS 页面读取课程。"""
@@ -1354,7 +1363,7 @@ class SignBackend:
                 self._log(f"重新登录后仍无法读取课程：{retry_error}", "warn")
                 return False
         if not self.courses:
-            self._log("本地登录信息已失效或未读取到课程，需要重新登录。", "warn")
+            self._log("未读取到课程，已保留登录缓存，请检查账号与网络状态。", "warn")
             return False
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         return True
@@ -1549,8 +1558,10 @@ class SignBackend:
         try:
             courses = self._fetch_courses()
         except Exception as error:
-            if self._is_login_rejected(error):
+            rejected = self._is_login_rejected(error)
+            if rejected:
                 self._rejected_browser_token = candidate_token
+            if rejected and (not previous_token or candidate_token == previous_token):
                 self._discard_credentials()
             else:
                 self.token, self.user_id = previous_token, previous_user_id

@@ -46,7 +46,7 @@ class FrozenPathTests(unittest.TestCase):
             self.assertTrue(browser_launcher.static_frontend_available())
 
     def test_frontend_dist_resolves_under_resource_root(self):
-        self.assertEqual(frontend_dist(), resource_root() / "web" / "dist")
+        self.assertEqual(frontend_dist(), resource_root() / "frontend" / "dist")
 
     def test_frozen_data_uses_stable_local_appdata(self):
         with patch.object(sys, "frozen", True, create=True), \
@@ -55,7 +55,7 @@ class FrozenPathTests(unittest.TestCase):
             self.assertEqual(data_root(), Path(r"C:\Users\tester\AppData\Local\DgutBot\data"))
 
     def test_dev_resource_root_is_source_directory(self):
-        self.assertEqual(resource_root(), Path(browser_launcher.__file__).resolve().parents[3])
+        self.assertEqual(resource_root(), Path(browser_launcher.__file__).resolve().parents[4])
 
 
 class BrowserLauncherTests(unittest.TestCase):

@@ -7,7 +7,7 @@
 
 - onedir 模式：符合 Velopack 官方对 Python/PyInstaller 应用的要求。
 - windowed 模式：交互启动器主动创建设置终端；后台服务与更新钩子保持无窗口。
-- web/dist 和 release-source.json 作为只读资源打进 _internal；用户数据
+- frontend/dist 和 release-source.json 作为只读资源打进 _internal；用户数据
   统一存放在 LocalAppData，不进入 Velopack 的 current 目录。
 - 正式图标放在 assets/dgut-bot.ico；缺失时以无图标构建，并打印明确提示。
 """
@@ -18,7 +18,7 @@ ROOT = Path(SPECPATH).resolve().parent
 ICON = ROOT / "assets" / "dgut-bot.ico"
 
 datas = [
-    (str(ROOT / "web" / "dist"), "web/dist"),
+    (str(ROOT / "frontend" / "dist"), "frontend/dist"),
     (str(ROOT / "release-source.json"), "."),
 ]
 
@@ -29,8 +29,8 @@ else:
     print("提示：未找到 assets/dgut-bot.ico，本次以无图标构建；不影响功能。")
 
 a = Analysis(
-    [str(ROOT / "src" / "dgutbot" / "app" / "browser_launcher.py")],
-    pathex=[str(ROOT), str(ROOT / "src")],
+    [str(ROOT / "backend" / "src" / "dgutbot" / "app" / "browser_launcher.py")],
+    pathex=[str(ROOT), str(ROOT / "backend" / "src")],
     binaries=[],
     datas=datas,
     hiddenimports=[],
@@ -71,7 +71,7 @@ exe = EXE(
 # Official shared-COLLECT multi-executable onedir layout:
 # https://pyinstaller.org/en/stable/spec-files.html#multipackage-bundles
 cli_analysis = Analysis(
-    [str(ROOT / "src" / "dgutbot" / "agent" / "agent_cli.py")], pathex=[str(ROOT), str(ROOT / "src")], binaries=[], datas=[],
+    [str(ROOT / "backend" / "src" / "dgutbot" / "agent" / "agent_cli.py")], pathex=[str(ROOT), str(ROOT / "backend" / "src")], binaries=[], datas=[],
     hiddenimports=[], hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=["pytest", "dgutbot.app.backend_commands", "dgutbot.domain.yxy_backend", "dgutbot.course.yxy_course", "dgutbot.course.yxy_quiz"],
     noarchive=False, optimize=0,

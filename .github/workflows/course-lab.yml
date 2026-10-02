@@ -4,10 +4,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'tools/**'
-      - 'quiz_simulator/**'
+      - 'backend/src/**'
+      - 'backend/tests/**'
+      - 'backend/tools/**'
+      - 'backend/quiz_simulator/**'
+      - 'backend/yxy_capture_fixed.py'
       - 'requirements.txt'
       - 'pyproject.toml'
       - '.github/workflows/course-lab.yml'
@@ -33,7 +34,7 @@ jobs:
       - name: Offline regression
         run: python -m pytest -q
       - name: Existing dialog and PPT browser fixtures
-        run: python tools/quiz_simulator.py
+        run: python backend/tools/quiz_simulator.py
       - name: CLI course browser regression
         shell: pwsh
         run: |
@@ -43,9 +44,9 @@ jobs:
             $labBrowser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
           }
           if (-not (Test-Path -LiteralPath $labBrowser)) { throw "Browser unavailable: $labBrowser" }
-          python tools/course_lab.py --browser $labBrowser --repeat 2
+          python backend/tools/course_lab.py --browser $labBrowser --repeat 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/capture_smoke.py --browser $labBrowser
+          python backend/tools/capture_smoke.py --browser $labBrowser
       - name: Preserve synthetic reports and failure screenshots
         if: always()
         uses: actions/upload-artifact@v4

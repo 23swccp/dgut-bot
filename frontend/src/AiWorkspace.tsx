@@ -95,7 +95,7 @@ export function AiWorkspace() {
           {!modelsLoading && models.length === 0 && <option value={modelId}>不可用</option>}
           {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
         </select></label>
-        <span className="ai-status">本地安全中继</span><button type="button" onClick={() => window.close()}>关闭</button>
+        <button type="button" onClick={() => window.close()}>关闭</button>
       </div>
     </header>
     <section className="ai-conversation" aria-live="polite">

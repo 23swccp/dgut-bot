@@ -43,7 +43,7 @@ SHOW_ALL_REQUESTS = False
 AUTO_REFRESH_INTERVAL = 120
 AUTO_REFRESH_URL_KEYWORDS = ("dgut.edu.cn", "ulearning.cn")
 
-# 抓取 API/JSON 的响应正文。静态 JS/CSS/图片不保存，避免日志过度膨胀。
+
 CAPTURE_RESPONSE_BODIES = True
 RESPONSE_BODY_URL_MARKERS = ("/courseapi/", "/classroomapi/", "/appapi/", "/api/")
 
@@ -254,7 +254,7 @@ def attach_to_target(target_id):
             return
         sessions[session_id] = {"target_id": target_id, "type": "page", "url": ""}
         session_request_maps[session_id] = {}
-        log(f"✅ 已附加到标签页 {target_id[:8]} (session {session_id[:8]})")
+        log(f" 已附加到标签页 {target_id[:8]} (session {session_id[:8]})")
         send_to_session(session_id, "Network.enable", callback=on_network_enabled)
         send_to_session(session_id, "Page.enable")
 
@@ -299,7 +299,7 @@ def _handle_session_message(session_id, msg):
         url = frame.get("url", "")
         info["url"] = url
         if url and should_log(url):
-            log(f"📄 [{target_id}] 跳转: {url}")
+            log(f" [{target_id}] 跳转: {url}")
 
     elif method == "Network.requestWillBeSent":
         params = (msg.get("params") or {})
@@ -391,7 +391,7 @@ def _handle_session_message(session_id, msg):
         info_req = request_map.get(req_id, {})
         url = info_req.get("url", "?")
         if info_req.get("log_network"):
-            log(f"  [{target_id}] ✅ 加载完成: {url}")
+            log(f"  [{target_id}]  加载完成: {url}")
         if info_req.get("log_network") and should_capture_response_body(url, info_req.get("mime", "")):
             def on_response_body(body_msg, page_url=url, content_type=info_req.get("mime", "")):
                 if "error" in body_msg:
@@ -436,7 +436,7 @@ def _handle_session_message(session_id, msg):
         info_req = request_map.get(req_id, {})
         url = info_req.get("url", "?")
         if should_log(url):
-            log_headers(f"  [{target_id}] 🌐 WS 握手请求: {url}", headers)
+            log_headers(f"  [{target_id}]  WS 握手请求: {url}", headers)
 
     elif method == "Network.webSocketHandshakeResponseReceived":
         params = (msg.get("params") or {})
@@ -446,7 +446,7 @@ def _handle_session_message(session_id, msg):
         info_req = request_map.get(req_id, {})
         url = info_req.get("url", "?")
         if should_log(url):
-            log(f"  [{target_id}] 🌐 WS 握手响应: {status} {url}")
+            log(f"  [{target_id}]  WS 握手响应: {status} {url}")
 
     elif method == "Network.webSocketFrameReceived":
         params = (msg.get("params") or {})
@@ -620,9 +620,9 @@ def auto_refresh_loop(fp):
 
             def on_reloaded(msg, page_url=url):
                 if "error" in msg:
-                    log(f"⚠️ 自动刷新失败: {page_url} | {msg['error']}", fp)
+                    log(f" 自动刷新失败: {page_url} | {msg['error']}", fp)
                 else:
-                    log(f"🔄 已自动刷新: {page_url}", fp)
+                    log(f" 已自动刷新: {page_url}", fp)
 
             send_to_session(sid, "Page.reload", {"ignoreCache": False}, callback=on_reloaded)
 
@@ -750,4 +750,5 @@ def capture():
 
 
 if __name__ == "__main__":
+
     capture()

@@ -1,4 +1,4 @@
-"""Read-only, privacy-filtered course sampling; entry point: tools/quiz_probe.py."""
+"""Read-only, privacy-filtered course sampling; entry point: backend/tools/quiz_probe.py."""
 from __future__ import annotations
 
 import argparse
@@ -21,7 +21,7 @@ try:
 except ImportError:
     from capture_privacy import Redactor, render_snapshot
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DOM_FUNCTION = Path(__file__).with_name('capture_dom.js').read_text(encoding='utf-8')
 ALLOWED_METHODS = {'Page.enable', 'Runtime.enable', 'Network.enable', 'Network.disable', 'Page.getFrameTree',
     'Page.createIsolatedWorld', 'Page.addScriptToEvaluateOnNewDocument', 'Page.removeScriptToEvaluateOnNewDocument',

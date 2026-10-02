@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, KeyRound, PenLine, Settings, type LucideIcon } from "lucide-react";
 import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
@@ -9,13 +9,14 @@ import { stateLabel, toastFor, type UpdateStatus } from "./updateClient";
 import { UpdateBell, UpdateDrawer, UpdateFailureDialog, UpdateToast, useScrollRestore } from "./UpdateDrawer";
 import { AboutGuide } from "./AboutGuide";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
+import { IndependentLoginPanel } from "./IndependentLoginPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStatus, type LessonItem } from "./courseScanView";
 import "./updateDrawer.css";
 import "./courseScan.css";
 import "./homeworkInput.css";
 
-type Page = "terminal" | "learning" | "homework" | "settings" | "about";
+type Page = "terminal" | "learning" | "homework" | "account" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "selected" | "monitoring";
 type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
 type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
@@ -31,13 +32,14 @@ type AppConfig = {
 };
 type AppInfo = { appName: string; version: string; repo: string };
 type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string };
-type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
+type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; hasCachedCredentials?: boolean; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
   terminal: ClipboardCheck,
   learning: BookOpenCheck,
   homework: PenLine,
+  account: KeyRound,
   settings: Settings,
   about: CircleQuestionMark,
 };
@@ -426,10 +428,10 @@ function App() {
       setBusy(false);
       return;
     }
-    append("登录缓存不可用，正在自动打开优学院登录页…");
+    append(result.hasCachedCredentials ? "暂时未能读取课程，登录缓存已保留，正在打开学校页面恢复连接…" : "没有可用的登录缓存，正在自动打开优学院登录页…");
     setPhase("login");
     const opened = await call("start_browser", loginPayload);
-    append(opened.ok ? "登录页已准备好。请在浏览器中完成登录，程序将自动继续。" : `启动浏览器失败：${opened.error || "未知错误"}`);
+    append(opened.ok ? (result.hasCachedCredentials ? "学校页面已准备好，程序将自动检查登录状态。" : "登录页已准备好。请在浏览器中完成登录，程序将自动继续。") : `启动浏览器失败：${opened.error || "未知错误"}`);
     setBusy(false);
   }
   async function refreshCourseScan(force = true) {
@@ -537,9 +539,9 @@ function App() {
       acceptLoginStatus(result.login);
       if (result.ok && result.courses?.length) { setCourses(result.courses); setPhase("courses"); }
       else {
-        append("登录缓存不可用，正在自动打开优学院登录页…"); setPhase("login");
+        append(result.hasCachedCredentials ? "暂时未能读取课程，登录缓存已保留，正在打开学校页面恢复连接…" : "没有可用的登录缓存，正在自动打开优学院登录页…"); setPhase("login");
         const opened = await call("start_browser", loginPayload);
-        append(opened.ok ? "请在浏览器中完成登录，程序将自动继续。" : `启动浏览器失败：${opened.error || "未知错误"}`);
+        append(opened.ok ? (result.hasCachedCredentials ? "学校页面已准备好，程序将自动检查登录状态。" : "请在浏览器中完成登录，程序将自动继续。") : `启动浏览器失败：${opened.error || "未知错误"}`);
       }
     } else if (phase === "selected") {
       if (input === "/") { await call("clear_selected_course"); setSelectedSignCourse(null); setPhase("courses"); append("已取消选定。"); }
@@ -563,8 +565,8 @@ function App() {
     if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "homework", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", settings: "设置", about: "关于" };
+  const navItems: Page[] = ["terminal", "learning", "homework", "account", "settings", "about"];
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", account: "独立登录", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -612,7 +614,7 @@ function App() {
           animate={{ width: 260, x: 0, opacity: 1 }}
           exit={reduceMotion ? { width: 0 } : { width: 0, x: -18, opacity: 0 }}
           transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => { setPage(item); if (item === "settings" || item === "about") setDrawerOpen(false); }} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
+        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => { setPage(item); if (item === "settings" || item === "about" || item === "account") setDrawerOpen(false); }} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
       {showHeaderUpdate && <UpdateBell status={updateStatus} open={drawerOpen} onToggle={toggleDrawer} />}
@@ -659,17 +661,17 @@ function App() {
               {courseScan.state === "scanning" && !courseScan.groups.length && <div className="lesson-scan-message">正在通过学校页面读取课程目录…</div>}
               {courseScan.state !== "scanning" && !filteredLessonGroups.length && <div className="lesson-scan-message">{courseScan.state === "error" ? (courseScan.error || "课程目录读取失败") : courseScan.unfinishedCount === 0 ? "没有发现未完成课件，或当前课程响应尚未提供可解析目录。" : "没有匹配的课件。"}</div>}
               {filteredLessonGroups.map(group => <section className="lesson-group" key={group.courseId}>
-                <h3><strong>{group.courseName}</strong><span>{group.items.length} 个未完成章节</span></h3>
+                <h3><strong>{group.courseName}</strong><span>{group.items.length} 个章节</span></h3>
                 <div className="lesson-children">{group.items.map(item => {
                   const index = filteredLessons.findIndex(candidate => candidate.id === item.id);
                   const chapterPath = item.chapterPath.join(" / ");
                   const runningHere = helperRunning && courseScan.selectedId === item.id;
                   return <div className={`lesson-entry ${runningHere ? "running" : ""}`} key={item.id}>
-                    <button type="button" role="option" aria-selected={index === lessonCursor} className={`lesson-row ${index === lessonCursor ? "active" : ""}`} onMouseEnter={() => setLessonCursor(index)} onClick={() => void openScannedLesson(item)} disabled={!item.canAutoOpen || learningActive}>
-                      <span><strong>{item.title}</strong>{chapterPath && chapterPath !== item.title && <small>{chapterPath}</small>}</span><em>{item.type}</em><b>{lessonProgress(item)}</b><i>{item.canAutoOpen ? "打开并启动" : item.unavailableReason}</i>
+                    <button type="button" role="option" aria-selected={index === lessonCursor} aria-label={item.canAutoOpen ? `${item.title}，${item.type}，${lessonProgress(item)}，打开` : `${item.title}：${item.unavailableReason}`} className={`lesson-row ${index === lessonCursor ? "active" : ""} ${item.canAutoOpen ? "" : "unavailable"}`} onMouseEnter={() => setLessonCursor(index)} onClick={() => void openScannedLesson(item)} disabled={!item.canAutoOpen || learningActive}>
+                      <span><strong>{item.title}</strong>{chapterPath && chapterPath !== item.title && <small>{chapterPath}</small>}</span><em>{item.type}</em><b>{lessonProgress(item)}</b>{!item.canAutoOpen && <i>{item.unavailableReason}</i>}
                     </button>
                     {runningHere && <section className="lesson-inline-record" aria-label={`${item.title}运行记录`}>
-                      <header><i aria-hidden="true"/><strong>运行记录</strong><span>实时更新</span></header>
+                      <header><i aria-hidden="true"/><strong>运行记录</strong></header>
                       <div className="course-event-log" ref={learningLogRef} onScroll={handleLearningScroll}>
                         {displayedCourseEvents.length === 0 && learningLogs.length === 0 && <div className="event-empty">正在等待运行事件…</div>}
                         {displayedCourseEvents.map(event => <div className={`course-event ${event.level}`} key={event.seq}><time>{formatClock(event.time)}</time><span>{event.message}</span><code>{event.code}</code></div>)}
@@ -687,11 +689,16 @@ function App() {
       </section>}
       {page !== "terminal" && page !== "learning" && <div className={`settings-body ${page === "about" ? "about-settings-body" : ""}`}>
       {page === "homework" && <HomeworkInputPanel />}
+      {page === "account" && <SettingsSection className="utility-settings" title="独立登录" subtitle="单独登录并核对一个账号的身份；凭据只保留在本次后端会话中，与签到账号互不影响。">
+        <div className="settings-surface">
+        <IndependentLoginPanel />
+        </div>
+      </SettingsSection>}
       {page === "settings" && <SettingsSection className="utility-settings" title="设置">
         <div className="settings-surface">
         <Card title="启动浏览器"><div className="browser-scan-line"><button type="button" className={`refresh-button ${detectingBrowsers ? "spinning" : ""}`} aria-label={detectingBrowsers ? "正在重新检测浏览器" : "重新检测浏览器"} title={detectingBrowsers ? "检测中…" : "重新检测"} disabled={detectingBrowsers} onClick={detectInstalledBrowsers}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1 .1-6.1L20 11"/></svg></button></div><div className="browser-list">{detectedBrowsers.map(option => { const selected = browser !== "自定义浏览器" && samePath(path, option.path); return <button type="button" key={option.path} className={`browser-option ${selected ? "selected" : ""}`} onClick={() => chooseDetectedBrowser(option)}><i className="radio-dot"/><strong>{option.name}</strong></button>; })}<button type="button" className={`browser-option ${browser === "自定义浏览器" ? "selected" : ""}`} onClick={chooseCustomBrowser}><i className="radio-dot"/><strong>自定义路径</strong></button></div>{browser === "自定义浏览器" && <label className="custom-browser-path"><span>程序路径</span><input className="field" value={path} onChange={event => setPath(event.target.value)}/></label>}</Card>
         <Card title="校园网"><div className="setting-line"><span>开机时打开校园网登录页</span><button type="button" aria-label="开机时打开校园网登录页" onClick={() => setCampusLoginOnStartup(!campusLoginOnStartup)} className={`switch ${campusLoginOnStartup ? "on" : ""}`}><i /></button></div></Card>
-        <Card title="账号登录恢复"><div className="setting-line"><span>启用账号密码自动重新登录</span><button type="button" aria-label="启用账号密码自动重新登录" onClick={() => setAccountEnabled(!accountEnabled)} className={`switch ${accountEnabled ? "on" : ""}`}><i /></button></div>{accountEnabled && <div className="account-fields"><input className="field" value={accountName} onChange={event => setAccountName(event.target.value)} placeholder="学号" autoComplete="username" disabled/><input className="field" type="password" value={accountPassword} onChange={event => setAccountPassword(event.target.value)} placeholder={hasSavedPassword ? "密码已保存；留空则不修改" : "密码"} autoComplete="current-password" disabled/></div>}</Card>
+        <Card title="账号登录恢复"><div className="setting-line"><span>启用账号密码自动重新登录</span><button type="button" aria-label="启用账号密码自动重新登录" onClick={() => setAccountEnabled(!accountEnabled)} className={`switch ${accountEnabled ? "on" : ""}`}><i /></button></div>{accountEnabled && <div className="account-fields"><input className="field" value={accountName} onChange={event => setAccountName(event.target.value)} placeholder="学号" autoComplete="username" maxLength={64}/><input className="field" type="password" value={accountPassword} onChange={event => setAccountPassword(event.target.value)} placeholder={hasSavedPassword ? "密码已保存；留空则不修改" : "密码"} autoComplete="current-password" maxLength={256}/></div>}</Card>
         <Card title="刷课"><label className="setting-field"><span>视频倍速</span><input className="field rate-field" type="number" min="1" max="16" step="0.5" value={playbackRate} onChange={event => setPlaybackRate(Math.min(16, Math.max(1, Number(event.target.value) || 1)))}/></label><div className="setting-line"><span>自动答题</span><button type="button" aria-label="自动答题" onClick={toggleQuizAutoAnswer} className={`switch ${quizAutoAnswer ? "on" : ""}`}><i /></button></div>{quizAutoAnswer && <div className="quiz-answer-options"><div className="setting-line"><span>选择题</span><button type="button" aria-label="自动回答选择题" onClick={toggleQuizChoice} className={`switch ${quizChoiceEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>判断题</span><button type="button" aria-label="自动回答判断题" onClick={toggleQuizJudgment} className={`switch ${quizJudgmentEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>填空题</span><button type="button" aria-label="自动回答填空题" onClick={toggleQuizBlank} className={`switch ${quizBlankEnabled ? "on" : ""}`}><i /></button></div></div>}</Card>
         <Card title="日志与数据"><div className="setting-line"><span>保存签到与错误详情</span><button type="button" aria-label="保存签到与错误详情" onClick={() => setLogging(!logging)} className={`switch ${logging ? "on" : ""}`}><i /></button></div><div className="log-path-row"><input className="field" value={logPath} onChange={event => setLogPath(event.target.value)}/><button className="secondary" disabled={busy} onClick={openLog}>打开日志</button></div></Card>
         <Card title="软件更新"><div className="setting-line update-setting-line"><span><strong>当前版本 v{appInfo?.version || updateStatus?.currentVersion || "…"}</strong><small>{updateSettingLabel}</small><small>请开启VPN或加速器再检查更新</small></span><button type="button" className="secondary" disabled={updateStatus?.state === "checking"} onClick={() => void checkUpdate()}>{updateStatus?.state === "checking" ? "检查中…" : "检查更新"}</button></div></Card>

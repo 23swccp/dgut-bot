@@ -46,7 +46,7 @@ from dgutbot.app.web_server import (
 from dgutbot.app.yxy_mutex import APP_MUTEX, NamedMutex, app_mutex_exists
 
 ROOT = data_root()
-FRONTEND = resource_root() / "web"
+FRONTEND = resource_root() / "frontend"
 LOG_PATH = ROOT / "browser-launcher.log"
 SERVICE_LOG_PATH = ROOT / "browser-service.log"
 APP_TITLE = "莞工小皮卡"
@@ -305,7 +305,7 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
         threading.Thread(target=server.serve_forever, name="local-api", daemon=True).start()
         server_started = True
         if use_static:
-            print(f"发布包模式：由本地服务直接托管 web/dist，前端地址 http://127.0.0.1:{web_port}", flush=True)
+            print(f"发布包模式：由本地服务直接托管 frontend/dist，前端地址 http://127.0.0.1:{web_port}", flush=True)
         else:
             log_file = LOG_PATH.open("w", encoding="utf-8")
             vite_env = os.environ.copy()

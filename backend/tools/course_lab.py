@@ -19,8 +19,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "backend" / "src"))
+sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT))
 
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
@@ -154,7 +155,7 @@ class Lab:
                            {"accepted": accepted, "correct": correct})
 
         try:
-            site = self.serve(partial(Site, directory=str(ROOT / "quiz_simulator")))
+            site = self.serve(partial(Site, directory=str(ROOT / "backend" / "quiz_simulator")))
             self.site_url = f"http://127.0.0.1:{site.server_address[1]}"
             api = self.serve(web_server.LocalApiHandler)
             info = new_runtime(api.server_address[1])
@@ -211,7 +212,7 @@ class Lab:
         return result.get("result", {}).get("value")
 
     def cli(self, tool, payload=None, error=None):
-        env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))), "PYTHONIOENCODING": "utf-8"}
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "backend" / "src"), str(ROOT / "backend"), str(ROOT))), "PYTHONIOENCODING": "utf-8"}
         process = subprocess.run([shutil.which("python") or sys.executable, "-m", "dgutbot.agent.agent_cli", "call", tool],
                                  input=json.dumps(payload or {}, ensure_ascii=False).encode("utf-8"),
                                  capture_output=True, timeout=40, env=env, cwd=ROOT)

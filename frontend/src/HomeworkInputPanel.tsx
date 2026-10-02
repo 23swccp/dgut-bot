@@ -55,7 +55,8 @@ export function HomeworkInputPanel() {
   const [expandedCourseIds, setExpandedCourseIds] = useState<Set<string>>(() => new Set());
   const [reviewingItemId, setReviewingItemId] = useState("");
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
-  const [bulkMessage, setBulkMessage] = useState<{ good: boolean; text: string } | null>(null);
+  const [submissionResult, setSubmissionResult] = useState<{ good: boolean; text: string } | null>(null);
+  const [preflightError, setPreflightError] = useState("");
   const promptedScanKey = useRef("");
   const [result, setResult] = useState<{ good: boolean; message: string } | null>(null);
 
@@ -80,7 +81,7 @@ export function HomeworkInputPanel() {
   useEffect(() => {
     let disposed = false;
     if (scan.state === "scanning") {
-      setBulkMessage(null);
+      setPreflightError("");
       return () => { disposed = true; };
     }
     if (scan.state !== "completed" || scan.pendingReviewCount < 1) return () => { disposed = true; };
@@ -91,7 +92,7 @@ export function HomeworkInputPanel() {
     void command("get_pending_homework_review_candidates").then(response => {
       if (disposed) return;
       if (!response.ok || !response.bulkReviewCandidates) {
-        setBulkMessage({ good: false, text: response.error || "互评时间检查失败" });
+        setPreflightError(response.error || "互评时间检查失败");
         return;
       }
       const candidates = response.bulkReviewCandidates.items;
@@ -102,7 +103,7 @@ export function HomeworkInputPanel() {
       );
       if (confirmed) void submitPending100(candidates.map(item => item.itemId));
     }).catch(() => {
-      if (!disposed) setBulkMessage({ good: false, text: "互评时间检查失败" });
+      if (!disposed) setPreflightError("互评时间检查失败");
     });
     return () => { disposed = true; };
   }, [scan.state, scan.cachedAt, scan.pendingReviewCount]);
@@ -148,16 +149,16 @@ export function HomeworkInputPanel() {
   async function submitPending100(itemIds: string[]) {
     if (bulkSubmitting) return;
     setBulkSubmitting(true);
-    setBulkMessage(null);
+    setSubmissionResult(null);
     try {
       const response = await command("submit_pending_homework_reviews", { itemIds });
       if (!response.ok || !response.bulkReviewSubmit) throw new Error(response.error || "100 分互评提交失败");
       const value = response.bulkReviewSubmit;
       const good = value.failures.length === 0;
       const failures = value.failures.map(item => `${item.title}：${item.reason}`).join("；");
-      setBulkMessage({ good, text: failures ? `${value.message}。${failures}` : value.message });
+      setSubmissionResult({ good, text: failures ? `${value.message}。${failures}` : value.message });
     } catch (error) {
-      setBulkMessage({ good: false, text: error instanceof Error ? error.message : "100 分互评提交失败" });
+      setSubmissionResult({ good: false, text: error instanceof Error ? error.message : "100 分互评提交失败" });
     } finally { setBulkSubmitting(false); }
   }
 
@@ -185,7 +186,7 @@ export function HomeworkInputPanel() {
             : `发现 ${scan.peerReviewCount} 个互评中的作业`;
 
   return <section className="settings-page homework-page" aria-label="作业">
-    <div className="page-intro"><div><h2>作业</h2><p>扫描全部课程的互评作业，也可以向当前打开的作业框输入文字。</p></div></div>
+    <div className="page-intro"><div><h2>作业</h2></div></div>
     <article className="card homework-scan-card">
       <div className="homework-card-head">
         <div><h3>互评扫描</h3><p>{summary}{scan.fromCache ? " · 已显示 5 分钟内缓存" : ""}</p></div>
@@ -195,8 +196,8 @@ export function HomeworkInputPanel() {
       </div>
       {scan.state === "auth_required" && <div className="homework-scan-message warning">请先在程序浏览器中登录优学院并读取课程，再重新扫描。</div>}
       {scan.state === "scanning" && <div className="homework-scan-progress"><i style={{ width: `${scan.totalCourses ? scan.scannedCourses / scan.totalCourses * 100 : 0}%` }} /></div>}
-      {scan.state === "completed" && scan.peerReviewCount === 0 && <div className="homework-scan-empty">✓ 当前没有发现“未互评”或“互评中”的作业</div>}
-      {bulkMessage && <div className={`homework-scan-message ${bulkMessage.good ? "" : "warning"}`} role="status">{bulkMessage.text}</div>}
+      {submissionResult && <div className={`homework-scan-message ${submissionResult.good ? "" : "warning"}`} role="status"><strong>提交结果</strong>{submissionResult.text}</div>}
+      {preflightError && <div className="homework-scan-message warning" role="status">{preflightError}</div>}
       <div className="peer-review-groups">
         {scan.groups.map((group, groupIndex) => {
           const courseOpen = expandedCourseIds.has(group.courseId);
@@ -221,14 +222,17 @@ export function HomeworkInputPanel() {
                 onClick={() => setReviewingItemId(current => current === item.id ? "" : item.id)}
               ><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 6 4.5 4 4.5-4" /></svg></button>
             </div>
-            {reviewingItemId === item.id && <HomeworkReviewPanel itemId={item.id} onSubmitted={() => void refreshScan(true)} />}
+            {reviewingItemId === item.id && <HomeworkReviewPanel itemId={item.id} onSubmissionResult={value => {
+              setSubmissionResult(value);
+              void refreshScan(true);
+            }} />}
           </div>)}</div>}
         </section>})}
       </div>
       {scan.failures.length > 0 && <details className="homework-scan-failures"><summary>{scan.failures.length} 门课程扫描失败</summary>{scan.failures.map(item => <p key={`${item.courseId}-${item.courseName}`}>{item.courseName}：{item.reason}</p>)}</details>}
     </article>
     <article className="card homework-card">
-      <div className="homework-card-title"><h3>作业内容输入</h3><p>把文字输入到程序浏览器中当前打开的优学院作业框。</p></div>
+      <div className="homework-card-title"><h3>禁止粘贴类型作业输入</h3><p>把文字输入到程序浏览器中当前打开的优学院作业框。</p></div>
       <div className="homework-status-line">
         <span className={`homework-status-dot ${status.state}`} aria-hidden="true" />
         <div><strong>{status.state === "ready" ? "已识别输入框" : status.state === "checking" ? "识别中" : "未识别输入框"}</strong><small aria-live="polite">{status.message}{status.state === "ready" && status.pasteBlocked ? " · 当前作业限制普通粘贴" : ""}</small></div>

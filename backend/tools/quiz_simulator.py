@@ -14,9 +14,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ROOT = PROJECT_ROOT
-SOURCE_ROOT = PROJECT_ROOT / "src"
+SOURCE_ROOT = PROJECT_ROOT / "backend" / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
@@ -27,7 +27,7 @@ from dgutbot.course.course_dialogs import DIALOG_STATE_JS
 from quiz_probe import TabConnection
 
 
-SIMULATOR_ROOT = PROJECT_ROOT / "quiz_simulator"
+SIMULATOR_ROOT = PROJECT_ROOT / "backend" / "quiz_simulator"
 
 
 def run_slide_fixture(backend, debug_port, web_port, cross_origin):

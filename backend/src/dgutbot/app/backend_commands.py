@@ -17,6 +17,7 @@ from dgutbot.app.app_paths import data_root
 from dgutbot.app.campus_startup import configure_campus_login_startup
 from dgutbot.app.homework_input import HomeworkInput
 from dgutbot.domain.yxy_backend import SignBackend
+from dgutbot.domain.independent_login import IndependentLoginError
 from dgutbot.app.velopack_updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
@@ -257,9 +258,31 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, **EVENT_BUFFER.get_events(after_seq)}
     if command == "load_saved_courses":
         ok = backend.load_saved_courses()
-        return {"ok": ok, "courses": courses(), "login": backend.login_status()}
+        return {"ok": ok, "courses": courses(), "login": backend.login_status(),
+                "hasCachedCredentials": bool(backend.token)}
     if command == "get_login_status":
         return {"ok": True, "login": backend.login_status()}
+    if command == "get_independent_login_status":
+        return {"ok": True, "independentLogin": backend.independent_login.status()}
+    if command == "list_independent_login_sources":
+        configured = int(backend.config.debug_port)
+        return {"ok": True, "configuredPort": configured,
+                "sources": backend.independent_login.discover([configured])}
+    if command == "clear_independent_login":
+        return {"ok": True, "independentLogin": backend.independent_login.clear()}
+    if command == "clear_independent_account":
+        backend.independent_login.clear_saved_account()
+        return {"ok": True, "independentLogin": backend.independent_login.status()}
+    if command in ("login_independent_account", "import_independent_login"):
+        try:
+            if command == "login_independent_account":
+                result = backend.independent_login.login(
+                    payload.get("username"), payload.get("password"), bool(payload.get("remember", False)))
+            else:
+                result = backend.independent_login.import_browser(payload.get("port"))
+            return {"ok": True, "independentLogin": result}
+        except IndependentLoginError as error:
+            return {"ok": False, "error": str(error), "independentLogin": backend.independent_login.status()}
     if command == "ai_chat":
         try:
             model_id = int(payload.get("modelId", backend.config.course_ai_model_id))

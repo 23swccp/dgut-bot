@@ -99,6 +99,7 @@ class SignMonitor:
         self.started_at = ""
         self.last_check = ""
         self.last_result = "等待首次检查"
+        self._last_sign_succeeded = False
 
     def classrooms(self, course_id: int) -> list[Classroom]:
         response = self._request(
@@ -144,7 +145,7 @@ class SignMonitor:
 
     @staticmethod
     def kind(score_type: int | None) -> str:
-        return {0: "选人点名", 1: "二维码签到", 2: "数字码签到", 3: "一键签到"}.get(score_type, "未知签到")
+        return {0: "位置签到", 1: "二维码签到", 2: "数字码签到", 3: "一键签到"}.get(score_type, "未知签到")
 
     @staticmethod
     def attendance_code(activity: Activity) -> str:
@@ -185,11 +186,12 @@ class SignMonitor:
         )
 
     def sign(self, course: CourseLike, classroom_id: int, activity: Activity) -> bool:
+        self._last_sign_succeeded = False
         score_type = activity.score_type
         kind = self.kind(score_type)
         activity_id = activity.relation_id
         code = self.attendance_code(activity) if score_type == 1 else ""
-        if score_type not in (1, 2, 3):
+        if score_type not in (0, 1, 2, 3):
             self._log(f"[{course.name}] {kind}：当前类型不支持自动处理，已跳过", "warn")
             self._write_log(course.name, kind, [
                 f"attendanceID: {activity_id}",
@@ -225,6 +227,7 @@ class SignMonitor:
             status, message = "exception", str(error)
             raw_response = str(error)
         if status == 200:
+            self._last_sign_succeeded = True
             self._log(f"✓ [{course.name}] {kind}：签到成功", "success")
         elif status in (201, 209):
             self._log(f"• [{course.name}] {kind}：已签到过", "muted")
@@ -264,6 +267,10 @@ class SignMonitor:
                 self._log(f"[{course.name}] 发现 {self.kind(activity.score_type)}，正在处理…", "info")
                 if self.sign(course, classroom.id, activity):
                     checked.add(key)
+                if self._last_sign_succeeded:
+                    self.stop()
+                    self._log("已自动停止签到监测。", "success")
+                    return "签到成功，已停止监测"
         if active_count == 0:
             self._log(f"[{course.name}] 本轮完成：未发现进行中的签到。", "muted")
             return "未发现进行中的签到"
