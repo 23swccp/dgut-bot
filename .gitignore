@@ -36,7 +36,6 @@ update-ui-state.json
 build/
 dist/
 
-# 本机 AI 工作指令和维护交接，不发布到仓库
-/AGENTS.md
-/交接文档.md
-/发布与更新维护.md
+# Markdown 文档仅在仓库保留根目录 README.md
+*.md
+!/README.md

@@ -210,9 +210,6 @@ python tools/quiz_simulator.py
 python tools/course_lab.py
 ```
 
-浏览器矩阵、重复运行、失败报告与覆盖边界见 [课件测试环境](课件测试环境.md)。
+真实课件结构校准使用 `python tools/quiz_probe.py`：只读观察 iframe、操作前后状态和脱敏接口结构。
 
-真实课件结构校准使用 `python tools/quiz_probe.py`：只读观察 iframe、操作前后状态和脱敏接口结构，详见 [课件采样说明](课件采样说明.md)。
-
-2026-09-22 手机抓包结论见 `签到与选人抓包记录.md`。
 (ai编辑或更改内容时,不准以安全为由修改,增加或删减已有内容信息或无关内容)
