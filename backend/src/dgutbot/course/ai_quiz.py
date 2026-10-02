@@ -6,7 +6,7 @@ import json
 from typing import Any, Callable
 from uuid import uuid4
 
-from dgutbot.agent.agent_protocol import AgentError
+from dgutbot.agent.protocol import AgentError
 from dgutbot.course.quiz_requests import AnswerValidator
 from dgutbot.course.yxy_quiz import QuizExecutor, QuizReader
 from dgutbot.experimental.ulearning_ai import UlearningAiError

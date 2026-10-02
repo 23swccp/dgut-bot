@@ -29,8 +29,8 @@ import requests
 from websocket import create_connection
 
 from dgutbot.course.yxy_quiz import QuizHandler
-from dgutbot.course.course_dialogs import DIALOG_POLICY_JS, handle_dialog
-from dgutbot.course.course_slides import SLIDE_READER_JS, SLIDE_STATE_JS, frame_point
+from dgutbot.course.dialogs import DIALOG_POLICY_JS, handle_dialog
+from dgutbot.course.slides import SLIDE_READER_JS, SLIDE_STATE_JS, frame_point
 
 
 COURSE_TAB_URL_KEYWORD = "ua.dgut.edu.cn/learnCourse"

@@ -1,6 +1,6 @@
 import unittest
 
-from dgutbot.agent.agent_protocol import AgentError, ToolDefinition, ToolRegistry, validate_schema
+from dgutbot.agent.protocol import AgentError, ToolDefinition, ToolRegistry, validate_schema
 
 
 class AgentProtocolTests(unittest.TestCase):

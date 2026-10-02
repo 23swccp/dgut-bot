@@ -10,15 +10,15 @@ from uuid import uuid4
 
 from websocket import WebSocketException
 
-from dgutbot.agent.agent_protocol import AgentError
-from dgutbot.agent.agent_tools import build_registry
-from dgutbot.agent.agent_service import AgentService
-from dgutbot.app.app_paths import data_root
+from dgutbot.agent.protocol import AgentError
+from dgutbot.agent.tools import build_registry
+from dgutbot.agent.service import AgentService
+from dgutbot.app.paths import data_root
 from dgutbot.app.campus_startup import configure_campus_login_startup
 from dgutbot.app.homework_input import HomeworkInput
 from dgutbot.domain.yxy_backend import SignBackend
 from dgutbot.domain.independent_login import IndependentLoginError
-from dgutbot.app.velopack_updater import UpdateManager
+from dgutbot.app.updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
 from dgutbot.experimental.ulearning_ai_browser import discover_browser_access, discover_cached_access

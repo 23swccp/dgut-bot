@@ -23,7 +23,7 @@ if str(SOURCE_ROOT) not in sys.path:
 from dgutbot.domain.yxy_backend import AppConfig, SignBackend
 from dgutbot.course.yxy_quiz import QUIZ_STATE_JS, QuizHandler, StandaloneBackend
 from dgutbot.course.yxy_course import INJECT_JS, CourseConfig, CourseController, PagePlan
-from dgutbot.course.course_dialogs import DIALOG_STATE_JS
+from dgutbot.course.dialogs import DIALOG_STATE_JS
 from quiz_probe import TabConnection
 
 
@@ -31,7 +31,7 @@ SIMULATOR_ROOT = PROJECT_ROOT / "backend" / "quiz_simulator"
 
 
 def run_slide_fixture(backend, debug_port, web_port, cross_origin):
-    from dgutbot.course.course_slides import SLIDE_STATE_JS
+    from dgutbot.course.slides import SLIDE_STATE_JS
     from dgutbot.course.yxy_course import PagePlan
     host = 'localhost' if cross_origin else '127.0.0.1'
     source = f'http://{host}:{web_port}/slides.html'

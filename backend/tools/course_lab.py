@@ -99,8 +99,8 @@ class Lab:
     def __init__(self, args, root):
         # 必须早于生产模块导入；所有配置、运行凭据、浏览器 profile 均在临时目录。
         os.environ["YXY_DATA_DIR"] = str(root)
-        from dgutbot.app import backend_commands as commands, web_server
-        from dgutbot.agent.agent_runtime import new_runtime, publish_runtime
+        from dgutbot.app import commands, server as web_server
+        from dgutbot.agent.runtime import new_runtime, publish_runtime
         from dgutbot.course import yxy_course
         from quiz_simulator import QuietHandler, wait_for_debug_port
         from quiz_probe import TabConnection
@@ -213,7 +213,7 @@ class Lab:
 
     def cli(self, tool, payload=None, error=None):
         env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "backend" / "src"), str(ROOT / "backend"), str(ROOT))), "PYTHONIOENCODING": "utf-8"}
-        process = subprocess.run([shutil.which("python") or sys.executable, "-m", "dgutbot.agent.agent_cli", "call", tool],
+        process = subprocess.run([shutil.which("python") or sys.executable, "-m", "dgutbot.agent.cli", "call", tool],
                                  input=json.dumps(payload or {}, ensure_ascii=False).encode("utf-8"),
                                  capture_output=True, timeout=40, env=env, cwd=ROOT)
         value = json.loads(process.stdout.decode("utf-8"))

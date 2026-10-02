@@ -12,15 +12,15 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from pathlib import Path
 
-from dgutbot.agent.agent_runtime import new_runtime, publish_runtime
-from dgutbot.app.backend_commands import configure_agent_registry
-from dgutbot.app.web_server import LocalApiHandler, configure_agent_api
-import dgutbot.agent.agent_cli as agent_cli
+from dgutbot.agent.runtime import new_runtime, publish_runtime
+from dgutbot.app.commands import configure_agent_registry
+from dgutbot.app.server import LocalApiHandler, configure_agent_api
+import dgutbot.agent.cli as agent_cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = shutil.which("python") or sys.executable
-CLI_COMMAND = [os.environ["DGUTCTL_TEST_EXE"]] if os.environ.get("DGUTCTL_TEST_EXE") else [PYTHON, "-m", "dgutbot.agent.agent_cli"]
+CLI_COMMAND = [os.environ["DGUTCTL_TEST_EXE"]] if os.environ.get("DGUTCTL_TEST_EXE") else [PYTHON, "-m", "dgutbot.agent.cli"]
 
 
 class AgentCliTests(unittest.TestCase):

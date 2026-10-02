@@ -17,8 +17,8 @@ from urllib.error import URLError
 from urllib.request import urlopen
 from uuid import uuid4
 
-from dgutbot.agent.agent_protocol import AgentError, SCHEMA_VERSION
-from dgutbot.app.app_paths import agent_runtime_root
+from dgutbot.agent.protocol import AgentError, SCHEMA_VERSION
+from dgutbot.app.paths import agent_runtime_root
 
 
 RUNTIME_FILENAME = "agent-runtime.json"

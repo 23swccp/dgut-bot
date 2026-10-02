@@ -4,12 +4,12 @@ import unittest
 from unittest.mock import Mock
 from types import SimpleNamespace
 
-from dgutbot.agent.agent_protocol import AgentError
-from dgutbot.agent.agent_tasks import IdempotencyStore, TaskManager
-from dgutbot.agent.agent_leases import LeaseManager
-from dgutbot.app.backend_commands import EventBuffer
-from dgutbot.agent.agent_service import AgentService
-from dgutbot.agent.agent_tools import build_registry
+from dgutbot.agent.protocol import AgentError
+from dgutbot.agent.tasks import IdempotencyStore, TaskManager
+from dgutbot.agent.leases import LeaseManager
+from dgutbot.app.commands import EventBuffer
+from dgutbot.agent.service import AgentService
+from dgutbot.agent.tools import build_registry
 
 
 class AgentTaskTests(unittest.TestCase):

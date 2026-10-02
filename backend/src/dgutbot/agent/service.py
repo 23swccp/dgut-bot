@@ -5,9 +5,9 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from dgutbot.agent.agent_leases import LeaseManager
-from dgutbot.agent.agent_protocol import AgentError
-from dgutbot.agent.agent_tasks import IdempotencyStore, TaskManager, TERMINAL
+from dgutbot.agent.leases import LeaseManager
+from dgutbot.agent.protocol import AgentError
+from dgutbot.agent.tasks import IdempotencyStore, TaskManager, TERMINAL
 from dgutbot.course.quiz_requests import AgentAnswerProvider, QuizRequestManager
 
 

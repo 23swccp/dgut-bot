@@ -10,7 +10,7 @@ from dgutbot.domain.independent_login import (
     IDENTITY_URL, LOGIN_ORIGIN, LOGIN_REFERER, LOGIN_URL, USER_AGENT, IndependentLogin, IndependentLoginError,
 )
 from dgutbot.domain.yxy_backend import SignBackend
-from dgutbot.app import backend_commands
+from dgutbot.app import commands as backend_commands
 
 TOKEN = "test-independent-token-1234"
 PASSWORD = "test-private-password-5678"

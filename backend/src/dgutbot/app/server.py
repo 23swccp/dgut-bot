@@ -16,10 +16,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
-from dgutbot.app.app_paths import frontend_dist
-from dgutbot.agent.agent_runtime import new_runtime, publish_runtime, remove_runtime
-from dgutbot.agent.agent_protocol import AgentError, SCHEMA_VERSION, error_response, response
-from dgutbot.app.backend_commands import AGENT_SERVICE, agent_capabilities, backend, configure_agent_registry, handle, handle_agent, update_manager
+from dgutbot.app.paths import frontend_dist
+from dgutbot.agent.runtime import new_runtime, publish_runtime, remove_runtime
+from dgutbot.agent.protocol import AgentError, SCHEMA_VERSION, error_response, response
+from dgutbot.app.commands import AGENT_SERVICE, agent_capabilities, backend, configure_agent_registry, handle, handle_agent, update_manager
 from version import APP_VERSION
 
 

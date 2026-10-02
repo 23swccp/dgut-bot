@@ -1,7 +1,7 @@
 import io
 import json
 
-import yxy_capture_fixed as capture
+from backend.tools import capture
 
 
 def test_capture_logs_headers_and_body_verbatim(monkeypatch):

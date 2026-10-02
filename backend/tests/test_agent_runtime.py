@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from dgutbot.agent.agent_protocol import AgentError
-from dgutbot.agent.agent_runtime import load_runtime, new_runtime, publish_runtime, remove_runtime, pid_is_running
+from dgutbot.agent.protocol import AgentError
+from dgutbot.agent.runtime import load_runtime, new_runtime, publish_runtime, remove_runtime, pid_is_running
 
 
 class AgentRuntimeTests(unittest.TestCase):

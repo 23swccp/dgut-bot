@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import Mock
 
-from dgutbot.course.course_dialogs import handle_dialog
+from dgutbot.course.dialogs import handle_dialog
 from dgutbot.course.yxy_course import PagePlan, CourseController, CourseConfig
 from dgutbot.course.yxy_quiz import QuizHandler
 

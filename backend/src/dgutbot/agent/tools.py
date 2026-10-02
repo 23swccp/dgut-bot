@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from dgutbot.agent.agent_protocol import AgentError, SCHEMA_VERSION, ToolDefinition, ToolRegistry
+from dgutbot.agent.protocol import AgentError, SCHEMA_VERSION, ToolDefinition, ToolRegistry
 from version import APP_NAME, APP_VERSION
-from dgutbot.agent.agent_schemas import OUTPUTS
+from dgutbot.agent.schemas import OUTPUTS
 
 
 EMPTY_INPUT = {"type": "object", "properties": {}, "additionalProperties": False}

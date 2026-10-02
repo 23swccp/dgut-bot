@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from dgutbot.app.app_paths import is_frozen, resource_root
+from dgutbot.app.paths import is_frozen, resource_root
 
 
 DGUT_LOGIN_URL = "https://login.dgut.edu.cn/eportal/index.jsp"

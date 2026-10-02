@@ -3,10 +3,10 @@ import json
 import threading
 import unittest
 
-from dgutbot.agent.agent_leases import LeaseManager
-from dgutbot.agent.agent_protocol import AgentError
-from dgutbot.agent.agent_tasks import IdempotencyStore, TaskManager
-from dgutbot.app.backend_commands import EventBuffer
+from dgutbot.agent.leases import LeaseManager
+from dgutbot.agent.protocol import AgentError
+from dgutbot.agent.tasks import IdempotencyStore, TaskManager
+from dgutbot.app.commands import EventBuffer
 from dgutbot.course.quiz_requests import QuizRequestManager
 from dgutbot.course.yxy_quiz import QuizHandler, QUIZ_STATE_JS
 

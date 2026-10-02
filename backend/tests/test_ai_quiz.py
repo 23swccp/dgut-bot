@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dgutbot.agent.agent_protocol import AgentError
+from dgutbot.agent.protocol import AgentError
 from dgutbot.course.ai_quiz import AiAnswerError, UlearningAiAnswerProvider, _batches, _parse_reply, _prompt
 from dgutbot.course.yxy_course import CourseConfig
 from dgutbot.course.yxy_quiz import QuizHandler, QUIZ_STATE_JS

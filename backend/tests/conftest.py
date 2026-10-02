@@ -6,15 +6,15 @@ import sys
 import tempfile
 
 _MODULE_ALIASES = {
-    "agent_cli": "dgutbot.agent.agent_cli", "agent_leases": "dgutbot.agent.agent_leases",
-    "agent_protocol": "dgutbot.agent.agent_protocol", "agent_runtime": "dgutbot.agent.agent_runtime",
-    "agent_tasks": "dgutbot.agent.agent_tasks", "agent_tools": "dgutbot.agent.agent_tools",
+    "agent_cli": "dgutbot.agent.cli", "agent_leases": "dgutbot.agent.leases",
+    "agent_protocol": "dgutbot.agent.protocol", "agent_runtime": "dgutbot.agent.runtime",
+    "agent_tasks": "dgutbot.agent.tasks", "agent_tools": "dgutbot.agent.tools",
     "browser_launcher": "dgutbot.app.browser_launcher", "browser_lifetime": "dgutbot.app.browser_lifetime",
-    "browser_paths": "dgutbot.app.browser_paths", "backend_commands": "dgutbot.app.backend_commands",
-    "web_server": "dgutbot.app.web_server", "velopack_updater": "dgutbot.app.velopack_updater",
+    "browser_paths": "dgutbot.app.browser_paths", "backend_commands": "dgutbot.app.commands",
+    "web_server": "dgutbot.app.server", "velopack_updater": "dgutbot.app.updater",
     "yxy_backend": "dgutbot.domain.yxy_backend", "yxy_course": "dgutbot.course.yxy_course",
-    "yxy_quiz": "dgutbot.course.yxy_quiz", "course_dialogs": "dgutbot.course.course_dialogs",
-    "course_slides": "dgutbot.course.course_slides", "quiz_requests": "dgutbot.course.quiz_requests",
+    "yxy_quiz": "dgutbot.course.yxy_quiz", "course_dialogs": "dgutbot.course.dialogs",
+    "course_slides": "dgutbot.course.slides", "quiz_requests": "dgutbot.course.quiz_requests",
 }
 for _old_name, _new_name in _MODULE_ALIASES.items():
     sys.modules.setdefault(_old_name, importlib.import_module(_new_name))

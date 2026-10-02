@@ -24,8 +24,8 @@ from typing import Any, Callable
 from urllib.request import urlopen
 
 from websocket import create_connection
-from dgutbot.agent.agent_protocol import AgentError
-from dgutbot.course.course_dialogs import DIALOG_POLICY_JS, AUTOMATIC_DIALOG_POLICIES, handle_dialog
+from dgutbot.agent.protocol import AgentError
+from dgutbot.course.dialogs import DIALOG_POLICY_JS, AUTOMATIC_DIALOG_POLICIES, handle_dialog
 
 PORT = 9222
 TAB_KEYWORD = "ua.dgut.edu.cn/learnCourse"

@@ -98,7 +98,7 @@ def test_bridge_probe_only_discovers_browser_access():
 
 
 def test_backend_chat_command_returns_only_safe_tool_count():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     reply = SimpleNamespace(text="answer", reasoning="", upstream_tool_calls=({"arguments": "private"},))
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -109,7 +109,7 @@ def test_backend_chat_command_returns_only_safe_tool_count():
 
 
 def test_gui_course_start_requires_ready_ai_when_auto_answer_is_enabled():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
     from dgutbot.experimental.ulearning_ai import UlearningAiError
 
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -126,7 +126,7 @@ def test_gui_course_start_requires_ready_ai_when_auto_answer_is_enabled():
 
 
 def test_gui_course_start_injects_ai_provider_after_probe():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     observed = []
     controller = SimpleNamespace(emit=lambda *_args: None)
@@ -147,7 +147,7 @@ def test_gui_course_start_injects_ai_provider_after_probe():
 
 
 def test_failed_gui_course_start_keeps_one_shot_auto_answer_armed():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(backend_commands.backend.config, "course_quiz_auto_answer", True)
@@ -163,7 +163,7 @@ def test_failed_gui_course_start_keeps_one_shot_auto_answer_armed():
 
 
 def test_gui_course_start_skips_ai_probe_when_auto_answer_is_disabled():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     observed = []
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -176,7 +176,7 @@ def test_gui_course_start_skips_ai_probe_when_auto_answer_is_disabled():
 
 
 def test_backend_models_command_returns_dynamic_safe_fields():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     models = (AiModel(1, "通义千问"), AiModel(4, "通义千问VL", vision=True))
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -190,7 +190,7 @@ def test_backend_models_command_returns_dynamic_safe_fields():
 
 
 def test_backend_ai_access_prefers_cached_login_without_browser():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     expected = object()
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -211,7 +211,7 @@ def test_backend_ai_access_prefers_cached_login_without_browser():
 
 
 def test_backend_ai_access_falls_back_to_browser_when_cache_is_unusable():
-    from dgutbot.app import backend_commands
+    from dgutbot.app import commands as backend_commands
 
     expected = object()
     with pytest.MonkeyPatch.context() as monkeypatch:

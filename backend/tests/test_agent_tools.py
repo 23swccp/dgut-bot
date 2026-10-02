@@ -1,9 +1,9 @@
 import unittest
 from types import SimpleNamespace
 
-from dgutbot.agent.agent_protocol import validate_schema
-from dgutbot.agent.agent_schemas import OUTPUTS
-from dgutbot.agent.agent_tools import build_registry
+from dgutbot.agent.protocol import validate_schema
+from dgutbot.agent.schemas import OUTPUTS
+from dgutbot.agent.tools import build_registry
 
 
 class FakeBackend:

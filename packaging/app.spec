@@ -71,9 +71,9 @@ exe = EXE(
 # Official shared-COLLECT multi-executable onedir layout:
 # https://pyinstaller.org/en/stable/spec-files.html#multipackage-bundles
 cli_analysis = Analysis(
-    [str(ROOT / "backend" / "src" / "dgutbot" / "agent" / "agent_cli.py")], pathex=[str(ROOT), str(ROOT / "backend" / "src")], binaries=[], datas=[],
+    [str(ROOT / "backend" / "src" / "dgutbot" / "agent" / "cli.py")], pathex=[str(ROOT), str(ROOT / "backend" / "src")], binaries=[], datas=[],
     hiddenimports=[], hookspath=[], hooksconfig={}, runtime_hooks=[],
-    excludes=["pytest", "dgutbot.app.backend_commands", "dgutbot.domain.yxy_backend", "dgutbot.course.yxy_course", "dgutbot.course.yxy_quiz"],
+    excludes=["pytest", "dgutbot.app.commands", "dgutbot.domain.yxy_backend", "dgutbot.course.yxy_course", "dgutbot.course.yxy_quiz"],
     noarchive=False, optimize=0,
 )
 cli_pyz = PYZ(cli_analysis.pure)

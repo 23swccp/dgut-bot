@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from dgutbot.agent.agent_protocol import AgentError, validate_schema
+from dgutbot.agent.protocol import AgentError, validate_schema
 from dgutbot.course.yxy_quiz import QuizExecutor, QuizReader
 
 QUIZ_TERMINAL = {"completed", "expired", "failed", "cancelled"}

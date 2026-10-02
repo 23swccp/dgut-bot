@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Callable
 from uuid import uuid4
 
-from dgutbot.agent.agent_protocol import AgentError
+from dgutbot.agent.protocol import AgentError
 
 TERMINAL = {"completed", "failed", "cancelled"}
 TRANSITIONS = {

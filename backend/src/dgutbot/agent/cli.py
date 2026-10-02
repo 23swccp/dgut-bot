@@ -9,8 +9,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, HTTPRedirectHandler, ProxyHandler, build_opener
 
-from dgutbot.agent.agent_protocol import SCHEMA_VERSION, error_response, request_id
-from dgutbot.agent.agent_runtime import RuntimeInfo, load_runtime, verify_runtime_health
+from dgutbot.agent.protocol import SCHEMA_VERSION, error_response, request_id
+from dgutbot.agent.runtime import RuntimeInfo, load_runtime, verify_runtime_health
 from version import APP_VERSION
 
 

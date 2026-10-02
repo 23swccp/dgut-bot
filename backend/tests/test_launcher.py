@@ -14,9 +14,9 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen
 
 import dgutbot.app.browser_launcher as browser_launcher
-from dgutbot.app.app_paths import data_root, frontend_dist, is_frozen, resource_root
+from dgutbot.app.paths import data_root, frontend_dist, is_frozen, resource_root
 from dgutbot.app.browser_launcher import choose_available_port, choose_frontend_port, service_command
-from dgutbot.app.web_server import (
+from dgutbot.app.server import (
     CLIENT_CLOSED_EVENT, LocalApiHandler, SHUTDOWN_EVENT, allowed_cors_origin,
     client_last_seen, reset_client_state,
 )

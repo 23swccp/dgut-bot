@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from dgutbot.app.velopack_updater import UpdateManager, select_targets_to_close
+from dgutbot.app.updater import UpdateManager, select_targets_to_close
 
 
 class FakeAsset:

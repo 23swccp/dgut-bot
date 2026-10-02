@@ -26,14 +26,14 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from dgutbot.app.app_paths import data_root, frontend_dist, is_frozen, resource_root
+from dgutbot.app.paths import data_root, frontend_dist, is_frozen, resource_root
 from dgutbot.app.browser_dialog import choose_browser_file
 from dgutbot.app.browser_paths import BROWSER_NAMES, resolve_browser_path
 from dgutbot.app.browser_lifetime import BrowserLifetime, FRONTEND_DISPLAY_PATH
 from dgutbot.app.campus_startup import configure_campus_login_startup, open_campus_login
-from dgutbot.agent.agent_runtime import new_runtime, publish_runtime, remove_runtime
-from dgutbot.app.backend_commands import AGENT_SERVICE, backend, configure_agent_registry
-from dgutbot.app.web_server import (
+from dgutbot.agent.runtime import new_runtime, publish_runtime, remove_runtime
+from dgutbot.app.commands import AGENT_SERVICE, backend, configure_agent_registry
+from dgutbot.app.server import (
     CLIENT_CLOSED_EVENT,
     LocalApiHandler,
     SHUTDOWN_EVENT,

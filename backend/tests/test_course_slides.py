@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from dgutbot.course.course_slides import frame_point
+from dgutbot.course.slides import frame_point
 from dgutbot.course.yxy_course import CourseController, CourseConfig, PagePlan
 
 

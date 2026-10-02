@@ -1,6 +1,6 @@
 """Inspect and optionally trigger one benign AI-workbench request through CDP Input.
 
-This is an experimental companion to ``yxy_capture_fixed.py``.  Page JavaScript
+This is an experimental companion to ``capture.py``.  Page JavaScript
 only observes element metadata; clicks and text entry always use the CDP Input
 domain so the action can be verified from the resulting DOM state.
 """

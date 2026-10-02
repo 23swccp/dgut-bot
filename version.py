@@ -18,7 +18,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parent / "backend" / "src"
 if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
-from dgutbot.app.app_paths import data_root, resource_root
+from dgutbot.app.paths import data_root, resource_root
 
 
 APP_NAME = "优学院助手"
