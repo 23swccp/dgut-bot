@@ -35,3 +35,8 @@ update-ui-state.json
 # PyInstaller 构建产物
 build/
 dist/
+
+# 本机 AI 工作指令和维护交接，不发布到仓库
+/AGENTS.md
+/交接文档.md
+/发布与更新维护.md
