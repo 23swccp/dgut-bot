@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from scripts.publish_gitee_release import DEFAULT_ASSET_NAME, _curl_upload, publish_release
+from scripts.publish import DEFAULT_ASSET_NAME, _curl_upload, publish_release
 
 
 class FakeResponse:
@@ -144,6 +144,6 @@ def test_curl_upload_uses_configured_timeout_without_exposing_token(tmp_path, mo
         )
         return subprocess.CompletedProcess(args, 0, stdout="HTTP 201", stderr="")
 
-    monkeypatch.setattr("scripts.publish_gitee_release.subprocess.run", fake_run)
+    monkeypatch.setattr("scripts.publish.subprocess.run", fake_run)
     result = _curl_upload("https://example/upload", "secret", asset, DEFAULT_ASSET_NAME)
     assert result["browser_download_url"] == "https://example/setup.exe"

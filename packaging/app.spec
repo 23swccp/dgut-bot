@@ -2,7 +2,7 @@
 """莞工小皮卡主程序：交给 Velopack 打包的 Windows x64 onedir 目录。
 
 构建：
-  python -m PyInstaller packaging/dgut-bot.spec --noconfirm
+  python -m PyInstaller packaging/app.spec --noconfirm
 产物：dist/dgut-bot/{dgut-bot.exe,dgutctl.exe} + 共享 _internal/
 
 - onedir 模式：符合 Velopack 官方对 Python/PyInstaller 应用的要求。

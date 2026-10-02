@@ -29,7 +29,7 @@ def campus_startup_command() -> str:
         executable = str(Path(sys.executable).resolve())
         return f'"{executable}" --campus-login'
     interpreter = shutil.which("pythonw.exe") or sys.executable
-    script = resource_root() / "scripts" / "campus_login_startup.pyw"
+    script = resource_root() / "scripts" / "campus.pyw"
     return f'"{interpreter}" "{script}"'
 
 

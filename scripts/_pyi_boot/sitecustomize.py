@@ -1,6 +1,6 @@
 """构建期 sitecustomize：修复 Windows 商店版 Python 失效的 sys.executable 别名。
 
-仅在通过 scripts/pyinstaller_run.py 注入 PYTHONPATH 时生效；
+仅在通过 scripts/freeze.py 注入 PYTHONPATH 时生效；
 可执行路径正常的环境中是空操作。PyInstaller 的主进程与隔离子进程
 都需要此修复，否则 compat.py 导入期的 getsize 检测会崩溃。
 """

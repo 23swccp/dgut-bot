@@ -20,7 +20,7 @@ class CampusStartupTests(unittest.TestCase):
         ):
             command = campus_startup.campus_startup_command()
         self.assertTrue(command.startswith('"C:\\Users\\tester\\WindowsApps\\pythonw.exe"'))
-        self.assertIn("campus_login_startup.pyw", command)
+        self.assertIn("campus.pyw", command)
 
     def test_windows_startup_immediately_opens_fixed_login_url(self):
         with patch.object(campus_startup.os, "name", "nt"), patch.object(

@@ -31,12 +31,12 @@ python -m pip install -r requirements.txt "pyinstaller==6.22.2"
 if ($LASTEXITCODE -ne 0) { throw "dependency installation failed" }
 python -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw "python tests failed" }
-python -m PyInstaller packaging/dgut-bot.spec --noconfirm --distpath dist --workpath build
+python -m PyInstaller packaging/app.spec --noconfirm --distpath dist --workpath build
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 
 $smokeData = Join-Path $env:TEMP "dgut-bot-smoke-data"
 $env:YXY_SMOKE_DATA_DIR = $smokeData
-python scripts/smoke_test.py "dist/dgut-bot"
+python scripts/smoke.py "dist/dgut-bot"
 if ($LASTEXITCODE -ne 0) { throw "packaged smoke test failed" }
 
 if ($SkipVelopack) {

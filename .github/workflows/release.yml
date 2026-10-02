@@ -64,14 +64,14 @@ jobs:
           }
 
       - name: Build onedir release
-        run: python -m PyInstaller packaging/dgut-bot.spec --noconfirm --distpath dist --workpath build
+        run: python -m PyInstaller packaging/app.spec --noconfirm --distpath dist --workpath build
 
       - name: Smoke test packaged app
         shell: pwsh
         env:
           YXY_SMOKE_DATA_DIR: ${{ runner.temp }}\dgut-bot-smoke-data
         run: |
-          python scripts/smoke_test.py "dist/dgut-bot"
+          python scripts/smoke.py "dist/dgut-bot"
 
       - name: Package and publish with Velopack
         shell: pwsh
@@ -110,4 +110,4 @@ jobs:
           GITEE_TARGET_COMMITISH: main
           GITEE_ASSET: Releases/DgutBot-win-Setup.exe
           GITEE_ASSET_NAME: DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe
-        run: python scripts/publish_gitee_release.py
+        run: python scripts/publish.py

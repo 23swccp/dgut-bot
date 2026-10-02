@@ -6,7 +6,7 @@ Windows 商店版 Python 在部分机器上 sys.executable / sys._base_executabl
 本包装注入 scripts/_pyi_boot/sitecustomize.py（主进程与隔离子进程共用），
 再进入 PyInstaller。普通 python.org 安装与虚拟环境不受影响。
 
-用法：python scripts/pyinstaller_run.py <pyinstaller 参数...>
+用法：python scripts/freeze.py <pyinstaller 参数...>
 """
 
 from __future__ import annotations

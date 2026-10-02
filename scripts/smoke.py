@@ -1,7 +1,7 @@
 """发行包启动冒烟测试：只验证本地服务、静态资源与生命周期。
 
 - 不访问真实课程、不提交签到、不执行真实刷课。
-- 用法：python scripts/smoke_test.py [PyInstaller onedir 目录]
+- 用法：python scripts/smoke.py [PyInstaller onedir 目录]
   不传参数时默认验证 dist/dgut-bot。
 
 验证项：

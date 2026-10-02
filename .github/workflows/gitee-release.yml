@@ -53,4 +53,4 @@ jobs:
             echo "GITEE_TOKEN repository secret is not configured."
             exit 1
           fi
-          python scripts/publish_gitee_release.py
+          python scripts/publish.py
