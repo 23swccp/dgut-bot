@@ -25,13 +25,14 @@ type BrowserOption = { name: string; path: string };
 type AppConfig = {
   browser_name?: string; browser_path?: string; save_log?: boolean; log_path?: string;
   campus_login_on_startup?: boolean;
+  selection_auto_leave?: boolean;
   course_playback_rate?: number; course_auto_dismiss_dialog?: boolean; course_document_scroll_enabled?: boolean;
   course_quiz_auto_answer?: boolean; course_quiz_choice_enabled?: boolean;
   course_quiz_judgment_enabled?: boolean; course_quiz_blank_enabled?: boolean;
   course_ai_model_id?: number;
 };
 type AppInfo = { appName: string; version: string; repo: string };
-type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string };
+type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string; activityMonitoring?: boolean; recoveryPending?: boolean; membershipPhase?: string; recoveryCourseName?: string; recoveryError?: string };
 type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; hasCachedCredentials?: boolean; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
@@ -68,6 +69,7 @@ function App() {
   const [detectingBrowsers, setDetectingBrowsers] = useState(false);
   const [logPath, setLogPath] = useState("./签到记录.md");
   const [campusLoginOnStartup, setCampusLoginOnStartup] = useState(false);
+  const [selectionAutoLeave, setSelectionAutoLeave] = useState(false);
   const [accountEnabled, setAccountEnabled] = useState(false);
   const [accountName, setAccountName] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
@@ -227,7 +229,7 @@ function App() {
       if (!disposed && result.ok && result.signStatus) {
         setSignStatus(result.signStatus);
         setPhase(current => result.signStatus?.running
-          ? (current === "login" || current === "courses" ? current : "monitoring")
+          ? "monitoring"
           : current === "monitoring" ? "selected" : current);
       }
     };
@@ -312,6 +314,7 @@ function App() {
   function loadConfig(config: AppConfig) {
     setBrowser(config.browser_name || "自动检测"); setPath(config.browser_path || ""); setLogging(config.save_log !== false); setLogPath(config.log_path || "./签到记录.md");
     setCampusLoginOnStartup(config.campus_login_on_startup === true);
+    setSelectionAutoLeave(config.selection_auto_leave === true);
     setPlaybackRate(config.course_playback_rate || 8); setAutoDismiss(config.course_auto_dismiss_dialog !== false); setDocumentScroll(config.course_document_scroll_enabled !== false);
     const choiceEnabled = config.course_quiz_choice_enabled !== false; const judgmentEnabled = config.course_quiz_judgment_enabled !== false; const blankEnabled = config.course_quiz_blank_enabled !== false;
     setQuizAutoAnswer(config.course_quiz_auto_answer !== false && (choiceEnabled || judgmentEnabled || blankEnabled)); setQuizChoiceEnabled(choiceEnabled);
@@ -355,6 +358,7 @@ function App() {
   async function saveSettings(values: Record<string, unknown>, message: string) {
     setBusy(true); const result = await call("update_settings", values); setBusy(false);
     if (result.ok) { if (result.config) loadConfig(result.config); save(message); }
+    else save(result.error || "保存设置失败");
   }
   async function saveAllSettings() {
     if (busy) return;
@@ -367,6 +371,7 @@ function App() {
       save_log: logging,
       log_path: logPath,
       campus_login_on_startup: campusLoginOnStartup,
+      selection_auto_leave: selectionAutoLeave,
       course_playback_rate: playbackRate,
       course_auto_dismiss_dialog: autoDismiss,
       course_document_scroll_enabled: documentScroll,
@@ -547,7 +552,11 @@ function App() {
       if (input === "/") { await call("clear_selected_course"); setSelectedSignCourse(null); setPhase("courses"); append("已取消选定。"); }
       else if (!input) { const result = await call("start_monitor"); if (result.ok) setPhase("monitoring"); }
     } else if (phase === "monitoring") {
-      if (input === "/" || input.toLowerCase() === "stop") { await call("stop_monitor"); setPhase("selected"); append("已停止轮询。 "); }
+      if (input === "/" || input.toLowerCase() === "stop") {
+        await call("stop_monitor");
+        if (signStatus.recoveryPending) append("已请求停止，正在先恢复原班级；恢复记录会保留到核对成功。");
+        else { setPhase("selected"); append("已停止轮询。 "); }
+      }
       else append("正在轮询。输入 / 或 stop 可以停止。 ");
     }
     setBusy(false);
@@ -619,6 +628,7 @@ function App() {
       <div className="workspace-content">
       {showHeaderUpdate && <UpdateBell status={updateStatus} open={drawerOpen} onToggle={toggleDrawer} />}
       {page === "terminal" && <section className={`terminal sign-terminal ${phase === "courses" ? "course-picking" : ""}`}>
+        {(signStatus.recoveryPending || signStatus.recoveryError) && <aside className="course-recovery-notice" role="status" aria-live="polite"><strong>{signStatus.recoveryCourseName || "课程"} · {signStatus.membershipPhase === "withdrawn" ? "已临时退课" : "待恢复原班级"}</strong><p>{signStatus.recoveryError || signStatus.lastResult}</p>{signStatus.recoveryPending && <button className="secondary" disabled={busy} onClick={async () => { setBusy(true); const result = await call("recover_course_membership"); setBusy(false); if (result.signStatus) setSignStatus(result.signStatus); if (!result.ok) append(result.error || "恢复失败，记录已保留"); }}>立即加回并停止</button>}</aside>}
         <div className="sign-event-log" ref={signLogRef} aria-label="签到关键事件">
           <div className="sign-day-label">今天</div>
           {displayedSignEvents.length === 0 && <div className="event-empty">暂无关键事件</div>}
@@ -696,6 +706,10 @@ function App() {
       </SettingsSection>}
       {page === "settings" && <SettingsSection className="utility-settings" title="设置">
         <div className="settings-surface">
+        <Card title="课堂活动监测" desc="签到成功后继续检查；发现选人会退出课程，活动或课堂结束后恢复原班级。重新加入可能需要教师审核。">
+          <div className="setting-line"><span>签到后监测选人并自动退课／加回</span><button type="button" role="switch" aria-checked={selectionAutoLeave} aria-label="签到后监测选人并自动退课加回" disabled={busy || signStatus.running || Boolean(signStatus.recoveryPending)} className={`switch ${selectionAutoLeave ? "on" : ""}`} onClick={() => void saveSettings({ selection_auto_leave: !selectionAutoLeave }, "课堂活动监测设置已保存")}><i /></button></div>
+          <p>{signStatus.running || signStatus.recoveryPending ? "请先停止监测并恢复原班级，再修改此设置。" : "修改后自动保存，下次启动继续使用。"}</p>
+        </Card>
         <Card title="启动浏览器"><div className="browser-scan-line"><button type="button" className={`refresh-button ${detectingBrowsers ? "spinning" : ""}`} aria-label={detectingBrowsers ? "正在重新检测浏览器" : "重新检测浏览器"} title={detectingBrowsers ? "检测中…" : "重新检测"} disabled={detectingBrowsers} onClick={detectInstalledBrowsers}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1 .1-6.1L20 11"/></svg></button></div><div className="browser-list">{detectedBrowsers.map(option => { const selected = browser !== "自定义浏览器" && samePath(path, option.path); return <button type="button" key={option.path} className={`browser-option ${selected ? "selected" : ""}`} onClick={() => chooseDetectedBrowser(option)}><i className="radio-dot"/><strong>{option.name}</strong></button>; })}<button type="button" className={`browser-option ${browser === "自定义浏览器" ? "selected" : ""}`} onClick={chooseCustomBrowser}><i className="radio-dot"/><strong>自定义路径</strong></button></div>{browser === "自定义浏览器" && <label className="custom-browser-path"><span>程序路径</span><input className="field" value={path} onChange={event => setPath(event.target.value)}/></label>}</Card>
         <Card title="校园网"><div className="setting-line"><span>开机时打开校园网登录页</span><button type="button" aria-label="开机时打开校园网登录页" onClick={() => setCampusLoginOnStartup(!campusLoginOnStartup)} className={`switch ${campusLoginOnStartup ? "on" : ""}`}><i /></button></div></Card>
         <Card title="账号登录恢复"><div className="setting-line"><span>启用账号密码自动重新登录</span><button type="button" aria-label="启用账号密码自动重新登录" onClick={() => setAccountEnabled(!accountEnabled)} className={`switch ${accountEnabled ? "on" : ""}`}><i /></button></div>{accountEnabled && <div className="account-fields"><input className="field" value={accountName} onChange={event => setAccountName(event.target.value)} placeholder="学号" autoComplete="username" maxLength={64}/><input className="field" type="password" value={accountPassword} onChange={event => setAccountPassword(event.target.value)} placeholder={hasSavedPassword ? "密码已保存；留空则不修改" : "密码"} autoComplete="current-password" maxLength={256}/></div>}</Card>

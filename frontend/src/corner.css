@@ -1232,6 +1232,23 @@
   background: #f7f9fb;
 }
 
+.course-recovery-notice {
+  flex: 0 0 auto;
+  margin: 12px 28px 0 70px;
+  padding: 10px 14px;
+  border: 1px solid #e1e7ec;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 13px;
+}
+.course-recovery-notice p { font-size: 12px; }
+.settings-surface .switch:disabled { cursor: default; opacity: .6; }
+.course-recovery-notice { border-color: #e4c48b; background: #fffaf0; }
+.course-recovery-notice .secondary { margin-top: 8px; }
+@media (max-width: 680px) {
+  .course-recovery-notice { margin-left: 16px; margin-right: 16px; }
+}
+
 .sign-overview {
   position: sticky;
   bottom: 0;

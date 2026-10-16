@@ -339,7 +339,7 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         backend.clear_selected_course()
         return {"ok": True}
     if command == "start_monitor":
-        if backend.selected_course is None:
+        if backend.selected_course is None and not backend.sign_monitor.membership.pending:
             return {"ok": False, "error": "尚未选择课程"}
         started = backend.start_monitor()
         return {"ok": started, "error": "签到监测已在运行" if not started else ""}
@@ -348,6 +348,11 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
     if command == "get_sign_monitor_status":
         return {"ok": True, "signStatus": backend.sign_monitor_status()}
+    if command == "recover_course_membership":
+        backend.sign_monitor.membership.stop()
+        resumed = backend.resume_course_recovery()
+        return {"ok": resumed, "signStatus": backend.sign_monitor_status(),
+                "error": "" if resumed else "请先登录原学生账号；恢复记录将保留"}
     if command == "start_course_helper":
         if backend.config.course_quiz_auto_answer:
             try:

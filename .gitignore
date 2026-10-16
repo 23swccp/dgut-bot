@@ -4,6 +4,8 @@ config.json
 auth.json
 account.json
 independent_account.json
+course-recovery.json
+course-recovery.json.tmp
 签到记录.md
 browser-launcher.log
 browser-service.log

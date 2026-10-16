@@ -42,6 +42,7 @@ class AppConfig:
     browser_name: str = ""
     debug_port: int = 9222
     poll_interval: int = 5
+    selection_auto_leave: bool = False
     save_log: bool = True
     log_path: str = ""
     lat: float = 23.0432
@@ -94,6 +95,7 @@ class AppConfig:
         merged.update(
             debug_port=cls._number(merged["debug_port"], defaults.debug_port, 1024, 65535, integer=True),
             poll_interval=cls._number(merged["poll_interval"], defaults.poll_interval, 2, 3600, integer=True),
+            selection_auto_leave=cls._boolean(merged["selection_auto_leave"], defaults.selection_auto_leave),
             save_log=cls._boolean(merged["save_log"], defaults.save_log),
             campus_login_on_startup=cls._boolean(
                 merged["campus_login_on_startup"], defaults.campus_login_on_startup,
@@ -497,6 +499,7 @@ class SignBackend:
             user_id=lambda: self.user_id,
             log=self._log,
             write_log=self._write_sign_log,
+            recovery_path=self.root / "course-recovery.json",
         )
         self._course_controller = None
         self._course_operation_lock = threading.RLock()
@@ -513,6 +516,16 @@ class SignBackend:
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
+        self.resume_course_recovery()
+
+    def resume_course_recovery(self) -> bool:
+        """恢复事务不依赖课程列表：已退出的课程可能是账号唯一一门课。"""
+        pending = self.sign_monitor.membership.pending if self.sign_monitor.membership else None
+        if pending and self.token and self.user_id == pending["userId"]:
+            if self.monitor_thread is not None and self.monitor_thread.is_alive():
+                return True
+            return self.sign_monitor.start()
+        return False
 
     def _load_config(self) -> AppConfig:
         values: dict = {}
@@ -1366,6 +1379,7 @@ class SignBackend:
             self._log("未读取到课程，已保留登录缓存，请检查账号与网络状态。", "warn")
             return False
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
+        self.resume_course_recovery()
         return True
 
     def browser_candidates(self) -> list[tuple[str, list[str]]]:
@@ -1590,10 +1604,13 @@ class SignBackend:
         self._persist_credentials()
         self._log("登录信息验证成功，课程列表读取完成。", "success")
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
+        self.resume_course_recovery()
         return True
 
     def select_course(self, query: str) -> Course | None:
         """只允许选择一门课程；模糊匹配有歧义时要求用户细化输入。"""
+        if self.sign_monitor.membership.pending:
+            return None
         keyword = query.strip()
         if not keyword or "," in keyword or "，" in keyword:
             return None
@@ -1604,9 +1621,13 @@ class SignBackend:
         return self.selected_course
 
     def clear_selected_course(self) -> None:
+        if self.sign_monitor.membership.pending:
+            return
         self.selected_course = None
 
     def select_course_id(self, course_id: str) -> Course | None:
+        if self.sign_monitor.membership.pending:
+            return None
         course = next((item for item in self.courses if str(item.id) == course_id), None)
         if course is not None:
             self.selected_course = course

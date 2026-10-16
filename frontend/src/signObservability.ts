@@ -55,6 +55,10 @@ export function signEventView(event: SignEvent): SignEventView {
   const selected = message.match(/^已选定：(.+)$/);
   if (selected) return { ...event, title: "已选择课程", detail: selected[1], symbol: "✓", tone: "info" };
 
+  if (message.includes("已临时退出课程")) return { ...event, title: "选人活动 · 已临时退课", detail: message, symbol: "!", tone: "warning" };
+  if (message.includes("已确认恢复原班级")) return { ...event, title: "已恢复原班级", detail: message, symbol: "✓", tone: "success" };
+  if (message.includes("继续监测选人活动") || message.includes("开始监测选人活动")) return { ...event, title: "签到完成 · 监测课堂活动", detail: message, symbol: "◎", tone: "info" };
+
   if (message.includes("签到成功")) return { ...event, title: "签到成功", detail: message.replace(/^✓\s*/, ""), symbol: "✓", tone: "success" };
   if (message.includes("发现") && message.includes("签到")) return { ...event, title: "发现签到活动", detail: message, symbol: "!", tone: "info" };
   if (event.level === "error") return { ...event, title: message, detail: "", symbol: "×", tone: "error" };

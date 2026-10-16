@@ -26,4 +26,22 @@ describe("sign observability", () => {
       tone: "muted",
     });
   });
+
+  it("shows activity monitoring after a successful sign instead of a stopped sign", () => {
+    expect(signEventView(event("[测试课] 签到成功，继续监测选人活动。"))).toMatchObject({
+      title: "签到完成 · 监测课堂活动", tone: "info",
+    });
+  });
+
+  it("keeps temporary withdrawal visible as a warning", () => {
+    expect(signEventView(event("[测试课] 发现选人活动，已临时退出课程；结束后自动恢复原班级。"))).toMatchObject({
+      title: "选人活动 · 已临时退课", tone: "warning",
+    });
+  });
+
+  it("shows verified restoration as success", () => {
+    expect(signEventView(event("[测试课] 已确认恢复原班级。"))).toMatchObject({
+      title: "已恢复原班级", tone: "success",
+    });
+  });
 });

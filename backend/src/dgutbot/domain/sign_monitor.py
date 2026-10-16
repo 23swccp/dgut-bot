@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import math
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import requests
+
+from dgutbot.domain.course_membership import CourseMembershipMonitor
 
 
 LMS_BASE = "https://lms.dgut.edu.cn/courseapi"
@@ -82,6 +86,7 @@ class SignMonitor:
         user_id: Callable[[], int | None],
         log: Callable[[str, str], None],
         write_log: Callable[[str, str, list[str]], None],
+        recovery_path: Path | None = None,
     ) -> None:
         self._request = request
         self._selected_course = selected_course
@@ -100,6 +105,23 @@ class SignMonitor:
         self.last_check = ""
         self.last_result = "等待首次检查"
         self._last_sign_succeeded = False
+        self.membership = (CourseMembershipMonitor(
+            request=self._membership_request, user_id=user_id, log=log, path=recovery_path,
+        ) if recovery_path is not None else None)
+
+    def _membership_request(self, method: str, url: str, **kwargs):
+        token = self._token().strip()
+        if not token:
+            raise RuntimeError("缺少登录信息，请登录原学生账号后恢复课程")
+        headers = {"Authorization": token, "Accept": "application/json, text/plain, */*",
+                   "Origin": "https://lms.dgut.edu.cn", "Referer": "https://lms.dgut.edu.cn/"}
+        if method == "PUT":
+            headers["Content-Type"] = "text/plain"
+        try:
+            return requests.request(method, url, headers=headers, timeout=12, allow_redirects=False, **kwargs)
+        except requests.RequestException:
+            # 第三方异常可能包含 URL 或请求头，面向界面只返回固定文案。
+            raise RuntimeError("课程接口连接失败，保留恢复记录；请检查网络和登录状态") from None
 
     def classrooms(self, course_id: int) -> list[Classroom]:
         response = self._request(
@@ -244,6 +266,13 @@ class SignMonitor:
         return status in (200, 201, 209)
 
     def poll_once(self, checked: set[str]) -> str:
+        if self.membership and (self.membership.pending or self.membership.context):
+            if (self.stop_event.is_set() or not getattr(self._settings(), "selection_auto_leave", False)):
+                self.membership.stop()
+            result = self.membership.tick()
+            if not self.membership.pending and not self.membership.context:
+                self.stop_event.set()
+            return result
         course = self._selected_course()
         if course is None:
             self._log("尚未选择课程，轮询已跳过。", "warn")
@@ -257,6 +286,12 @@ class SignMonitor:
         new_count = 0
         for classroom in classrooms:
             for activity in self.activities(classroom.id):
+                if (self.membership and getattr(self._settings(), "selection_auto_leave", False)
+                        and str(classroom.raw.get("status")) == "0" and activity.relation_type == 1
+                        and activity.state in (1, 2) and not self.stop_event.is_set()):
+                    if self.membership.arm(course, classroom):
+                        self._log(f"[{course.name}] 已确认签到完成，开始监测选人活动。", "success")
+                        return self.membership.tick()
                 if activity.relation_type != 1 or activity.state not in (0, 1) or activity.status != 0:
                     continue
                 active_count += 1
@@ -268,6 +303,16 @@ class SignMonitor:
                 if self.sign(course, classroom.id, activity):
                     checked.add(key)
                 if self._last_sign_succeeded:
+                    if (not self.stop_event.is_set() and self.membership
+                            and getattr(self._settings(), "selection_auto_leave", False)):
+                        try:
+                            if self.membership.arm(course, classroom):
+                                self._log(f"[{course.name}] 签到成功，继续监测选人活动。", "success")
+                                return self.membership.tick()
+                        except Exception:
+                            if self.membership.pending:
+                                return "签到已成功，选课变更结果待核对；恢复记录已保留"
+                            self._log("签到已成功，但活动监测初始化失败；未自动退课，请检查登录和班级信息。", "warn")
                     self.stop()
                     self._log("已自动停止签到监测。", "success")
                     return "签到成功，已停止监测"
@@ -280,18 +325,20 @@ class SignMonitor:
         return f"已处理 {new_count} 个签到活动"
 
     def status(self) -> dict[str, Any]:
+        membership = self.membership.status() if self.membership else {}
         with self.lock:
             running = self.thread is not None and self.thread.is_alive()
             course = self._selected_course()
             return {
                 "running": running,
                 "state": self.state.value,
-                "courseName": course.name if course else "",
+                "courseName": membership.get("recoveryCourseName") or (course.name if course else ""),
                 "intervalSeconds": self.interval,
                 "round": self.round,
                 "startedAt": self.started_at,
                 "lastCheck": self.last_check,
                 "lastResult": self.last_result,
+                **membership,
             }
 
     def start(self) -> bool:
@@ -300,6 +347,8 @@ class SignMonitor:
                 self._log("签到监测已在运行，无需重复启动。", "muted")
                 return False
             self.stop_event.clear()
+            if self.membership:
+                self.membership.reset()
             self.state = MonitorState.RUNNING
             self.round = 0
             self.interval = max(2, int(self._settings().poll_interval))
@@ -312,6 +361,8 @@ class SignMonitor:
 
     def stop(self) -> None:
         self.stop_event.set()
+        if self.membership:
+            self.membership.stop()
         with self.lock:
             if self.thread is not None and self.thread.is_alive():
                 self.state = MonitorState.STOPPED
@@ -322,7 +373,7 @@ class SignMonitor:
             interval = self.interval
             self._log(f"开始轮询，每 {interval} 秒检查一次。", "success")
             round_number = 0
-            while not self.stop_event.is_set():
+            while not self.stop_event.is_set() or (self.membership and self.membership.pending):
                 round_number += 1
                 try:
                     course = self._selected_course()
@@ -339,7 +390,11 @@ class SignMonitor:
                         self.last_check = datetime.now().astimezone().isoformat(timespec="seconds")
                         self.last_result = "检查失败"
                     self._log(f"轮询出错：{error}", "warn")
-                self.stop_event.wait(interval)
+                if self.stop_event.is_set() and self.membership and self.membership.pending:
+                    # 停止操作仍需继续恢复，避免 set 的 Event 导致忙循环。
+                    time.sleep(interval)
+                else:
+                    self.stop_event.wait(interval)
         finally:
             with self.lock:
                 self.state = MonitorState.IDLE
