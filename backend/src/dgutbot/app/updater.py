@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -19,7 +20,33 @@ import velopack
 
 
 GITHUB_NETWORK_HINT = "请开启支持 GitHub 的网络加速器后重试。"
-CHECK_TIMEOUT_SECONDS = 20.0
+CHECK_TIMEOUT_SECONDS = 40.0
+CHECK_REQUEST_TIMEOUT_SECONDS = 15.0
+CHECK_RETRY_DELAY_SECONDS = 1.0
+DOWNLOAD_TIMEOUT_SECONDS = 1800.0
+
+
+def is_transient_update_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return isinstance(error, (TimeoutError, requests.ConnectionError, requests.Timeout)) or any(
+        word in text for word in ("timeout", "timed out", "connection", "dns", "network", "resolve host")
+    ) or bool(re.search(r"\b(408|429|500|502|503|504)\b", text))
+
+
+def update_error_message(error: Exception) -> str:
+    message = str(error) or error.__class__.__name__
+    text = message.lower()
+    if any(word in text for word in ("not properly installed", "not installed", "auto-locate app manifest")):
+        return "当前运行环境缺少 Velopack 安装信息。源码运行不支持自动更新；已安装的程序请使用完整安装器重新安装。"
+    if "未配置" in message:
+        return message
+    if re.search(r"\b404\b", text):
+        return f"GitHub Release 缺少更新清单或更新包，请联系维护者检查发布附件。详情：{message}"
+    if re.search(r"\b(403|429)\b", text):
+        return f"更新服务器拒绝访问或请求过于频繁，请稍后重试。详情：{message}"
+    if is_transient_update_error(error):
+        return f"{message}；{GITHUB_NETWORK_HINT}"
+    return message
 
 
 def select_targets_to_close(targets: list[dict[str, Any]], base_url: str) -> list[dict[str, Any]]:
@@ -88,6 +115,7 @@ class UpdateManager:
         self.debug_port = debug_port or (lambda: 9222)
         self.base_url = "http://127.0.0.1:8765"
         self._manager_factory = manager_factory or self._default_manager
+        self._custom_manager = manager_factory is not None
         self._manager: Any | None = None
         self._pending: Any | None = None
         self._lock = threading.RLock()
@@ -113,7 +141,24 @@ class UpdateManager:
     def _default_manager(self) -> Any:
         if not self.repository:
             raise RuntimeError("未配置 GitHub 更新仓库")
-        source = velopack.GithubSource(f"https://github.com/{self.repository}")
+        # 直接读取公开 Release 附件，避免 GithubSource 的匿名 API 限流，
+        # 并使用原生请求超时，保证失败后能释放请求而不是永久占住线程。
+        source = velopack.HttpSource(
+            f"https://github.com/{self.repository}/releases/latest/download",
+            velopack.HttpOptions(Headers=[], TimeoutMilliseconds=int(CHECK_REQUEST_TIMEOUT_SECONDS * 1000)),
+        )
+        return velopack.UpdateManager(source)
+
+    def _manager_for_download(self, update: Any) -> Any:
+        if self._custom_manager:
+            return self._get_manager()
+        asset = getattr(update, "TargetFullRelease", update)
+        # 发布标签固定为 v<version>。锁定检测到的版本，避免下载期间发布新版
+        # 导致 latest 切换，并为大包保留独立的传输超时。
+        source = velopack.HttpSource(
+            f"https://github.com/{self.repository}/releases/download/v{asset.Version}",
+            velopack.HttpOptions(Headers=[], TimeoutMilliseconds=int(DOWNLOAD_TIMEOUT_SECONDS * 1000)),
+        )
         return velopack.UpdateManager(source)
 
     def _get_manager(self) -> Any:
@@ -219,7 +264,7 @@ class UpdateManager:
 
     def check(self, manual: bool = False) -> dict[str, Any]:
         with self._lock:
-            if self._state["state"] in {"checking", "downloading", "handoff", "waiting_for_exit"}:
+            if self._state["state"] in {"checking", "downloading", "ready_to_install", "handoff", "waiting_for_exit"}:
                 return {"ok": True, "skipped": True}
             if self._check_thread and self._check_thread.is_alive():
                 # Python 无法取消 SDK 的原生请求。保留单个请求，避免并发借用
@@ -227,6 +272,7 @@ class UpdateManager:
                 message = "上次更新请求仍未结束，请稍后重试；若持续无响应，请重启程序。"
                 self._set(error=message)
                 return {"ok": False, "error": message}
+            previous_state = self._state["state"]
             self._set("checking", error="")
 
         # 后台线程只返回结果；超时后绝不能自行修改状态或触发自动下载。
@@ -236,7 +282,17 @@ class UpdateManager:
             try:
                 manager = self._get_manager()
                 pending = manager.get_update_pending_restart()
-                update = None if pending is not None else manager.check_for_updates()
+                update = None
+                if pending is None:
+                    for attempt in range(2):
+                        try:
+                            update = manager.check_for_updates()
+                            break
+                        except Exception as error:
+                            if attempt or not is_transient_update_error(error):
+                                raise
+                            if self._stop.wait(CHECK_RETRY_DELAY_SECONDS):
+                                raise RuntimeError("更新检查已停止") from None
                 results.put((True, (pending, update)))
             except Exception as error:
                 results.put((False, error))
@@ -254,12 +310,11 @@ class UpdateManager:
             pending, update = result
             return self._apply_check_result(pending, update, manual=manual)
         except Exception as error:
-            message = str(error) or error.__class__.__name__
-            display = f"{message}；{GITHUB_NETWORK_HINT}"
-            self._set("idle", error=f"检查更新失败：{display}")
+            display = update_error_message(error)
+            self._set(previous_state, error=f"检查更新失败：{display}")
             if manual:
                 self._add_message("error", "检查更新失败", display)
-            return {"ok": False, "error": message}
+            return {"ok": False, "error": display, "retryable": is_transient_update_error(error)}
 
     def _apply_check_result(self, pending: Any, update: Any, *, manual: bool) -> dict[str, Any]:
         if pending is not None:
@@ -284,14 +339,19 @@ class UpdateManager:
 
     def start_auto_check(self, delay: float = 5.0) -> None:
         def delayed() -> None:
-            if not self._stop.wait(delay):
-                self.check(manual=False)
+            # 启动时可能尚未联网；仅对网络类故障进行有限次数的延后重试。
+            for wait in (delay, 30.0, 120.0):
+                if self._stop.wait(wait):
+                    return
+                result = self.check(manual=False)
+                if result.get("ok") or not result.get("retryable"):
+                    return
 
         threading.Thread(target=delayed, name="velopack-auto-check", daemon=True).start()
 
     def start_download(self) -> dict[str, Any]:
         with self._lock:
-            if self._state["state"] in {"checking", "downloading", "handoff", "waiting_for_exit"}:
+            if self._state["state"] in {"checking", "downloading", "ready_to_install", "handoff", "waiting_for_exit"}:
                 return {"ok": True, "skipped": True}
             if self._check_thread and self._check_thread.is_alive():
                 return {"ok": False, "error": "上次更新请求仍未结束，请稍后重试；若持续无响应，请重启程序。"}
@@ -320,10 +380,9 @@ class UpdateManager:
             self._set(downloaded=round(total * value / 100), total=total, percent=value)
 
         try:
-            self._get_manager().download_updates(update, progress)
+            self._manager_for_download(update).download_updates(update, progress)
         except Exception as error:
-            message = str(error) or error.__class__.__name__
-            display = f"{message}；{GITHUB_NETWORK_HINT}"
+            display = update_error_message(error)
             self._add_message("error", f"⚠ v{self._state['latestVersion']} 下载失败", display)
             self._set("download_failed", error=display)
             return

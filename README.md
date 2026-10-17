@@ -170,7 +170,9 @@
 
 ## 更新
 
-小皮卡通过 Velopack 从 GitHub 检查更新。若更新失败或速度较慢，请开启支持 GitHub 的网络加速器(如steam++,UU加速器,FastGitHub或VPN)；首次安装器也可从 [Gitee 下载页](https://gitee.com/swccq23/dgut-bot/releases) 获取。
+小皮卡通过 Velopack 直接读取 GitHub Release 的更新清单。网络短暂失败会自动重试一次；启动时尚未联网，会在约 30 秒、120 秒后各重试一次。检查失败不影响当前版本运行，可在设置页查看原因并重新检查。
+
+若提示网络连接失败或下载速度较慢，请开启支持 GitHub 的网络加速器后重试；首次安装器也可从 [Gitee 下载页](https://gitee.com/swccq23/dgut-bot/releases) 获取。源码运行不支持自动安装更新；若安装版提示缺少安装信息，请下载完整安装器重新安装。
 
 ---
 
@@ -233,6 +235,24 @@ python backend/tools/quiz_simulator.py
 ```powershell
 python backend/tools/course_lab.py
 ```
+
+更新实验室提供本地测试面板，可反复切换超时、断流、清单损坏、校验失败等场景，直接运行产品更新适配层和真实 Velopack SDK：
+
+```powershell
+python backend/tools/update_lab.py
+# 打开终端输出的本地地址；Ctrl+C 关闭面板。
+python backend/tools/update_lab.py --run-all
+```
+
+验证 Windows 原生更新移交、实际文件替换和新版重启：
+
+```powershell
+python backend/tools/update_lab.py --handoff
+# 如 Releases 中没有完整包，指定已有的包：
+python backend/tools/update_lab.py --handoff --package "路径\DgutBot-版本-full.nupkg"
+```
+
+实验室创建独立的 `DgutBotUpdateLab` 小程序和便携目录，只从已有包提取 `Update.exe`，不运行正式安装器。网络场景不安装程序；原生移交使用 Windows 自带 .NET Framework C# 编译器生成旧版和新版小程序，验证 1.0.0 → 1.0.1 后程序文件、启动标记、安装清单及测试用户数据。每轮结果保存在 `.update-lab/`，失败返回非零退出码。它覆盖更新协议与移交行为；正式应用的旧安装版升级、浏览器退出和安装器体验仍需在发布前另行验收。
 
 真实课件结构校准使用 `python backend/tools/quiz_probe.py`：只读观察 iframe、操作前后状态和脱敏接口结构。
 (ai编辑或更改内容时,不准以安全为由修改,增加或删减已有内容信息或无关内容)

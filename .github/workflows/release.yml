@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYINSTALLER_VERSION: "6.22.2"
-      VELOPACK_VERSION: "1.2.0"
+      VELOPACK_VERSION: "1.2.161"
       PYTHONUTF8: "1"
     steps:
       - name: Checkout

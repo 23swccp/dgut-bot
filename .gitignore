@@ -30,6 +30,7 @@ Releases/
 update-ui-state.json
 .smoke-data/
 .course-lab/
+.update-lab/
 .course-captures/
 
 # 本地逆向分析材料（体积大，不属于应用发布内容）

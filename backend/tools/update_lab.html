@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小皮卡 · 更新实验室</title>
+<style>
+  :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#24352c;background:#f3f6f2}
+  body{max-width:1080px;margin:56px auto;padding:0 24px}h1{font-size:32px;margin:12px 0}p{line-height:1.7;color:#617065}
+  .eyebrow{font-size:12px;letter-spacing:.15em;color:#38875c}.toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:28px 0}
+  button,select{font:inherit;padding:11px 16px;border:1px solid #c9d7cc;border-radius:8px;background:white;color:inherit}
+  button{cursor:pointer}button.primary{background:#28784d;color:white;border-color:#28784d}button:disabled{opacity:.5;cursor:wait}
+  .note{padding:14px 18px;background:#e8efe7;border-radius:9px;font-size:13px;line-height:1.8}.results{display:grid;gap:12px;margin:24px 0}
+  article{background:white;border:1px solid #dce4da;border-radius:12px;padding:20px}article header{display:flex;justify-content:space-between;gap:20px}
+  .pass{color:#28784d}.fail{color:#b23835}.tag{font-weight:700;font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.6;color:#59665d}
+  summary{cursor:pointer;margin-top:16px;font-size:13px}#status{font-size:13px}#empty{padding:40px;text-align:center;border:1px dashed #c9d7cc;border-radius:12px;color:#77857a}
+</style>
+<body>
+<div class="eyebrow">DGUT BOT / LOCAL UPDATE LAB</div>
+<h1>把更新故障留在本地</h1>
+<p>用小型合成程序和更新包，反复验证检查、重试、下载校验、状态恢复，以及 Windows 原生替换与重启。</p>
+<div class="note">网络场景使用真实 Velopack SDK 与产品更新适配层，数据写入独立目录。网络测试不执行安装；“原生移交”仅替换新建的测试程序，使用本机已有完整包中的 Update.exe。</div>
+<div class="toolbar">
+  <select id="case" aria-label="测试场景"></select>
+  <button id="run" class="primary">运行场景</button>
+  <button id="all">全部网络场景</button>
+  <button id="handoff">原生替换与重启</button>
+  <span id="status" role="status">正在连接…</span>
+</div>
+<p id="root" style="font-size:12px"></p>
+<div id="results" class="results"><div id="empty">选择一种故障，或运行全部网络场景。</div></div>
+<script>
+  const $=id=>document.getElementById(id);let initialized=false,rendered='';
+  async function run(test){
+    try{const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Token':'__TOKEN__'},body:JSON.stringify({case:test})});if(!r.ok)throw Error('请求失败 '+r.status);await poll()}
+    catch(e){$('status').textContent=String(e)}
+  }
+  $('run').onclick=()=>run($('case').value);$('all').onclick=()=>run('all');$('handoff').onclick=()=>run('handoff');
+  async function poll(){
+    try{
+      const r=await fetch('/api/status');if(!r.ok)throw Error('无法读取状态');const s=await r.json();
+      if(!initialized){for(const [key,label] of Object.entries(s.cases)){const option=document.createElement('option');option.value=key;option.textContent=label;$('case').append(option)}initialized=true}
+      for(const id of ['run','all','handoff','case'])$(id).disabled=s.running;
+      $('status').textContent=s.running?'运行中…':`${s.results.filter(r=>r.passed).length} / ${s.results.length} 项通过`;
+      $('root').textContent='报告目录：'+s.root;
+      const revision=JSON.stringify(s.results);
+      if(s.results.length&&revision!==rendered){rendered=revision;$('results').replaceChildren();for(const result of s.results){
+        const article=document.createElement('article'),header=document.createElement('header'),title=document.createElement('strong'),tag=document.createElement('span');
+        title.textContent=result.label||'Windows 原生替换与重启';tag.textContent=(result.passed?'通过':'失败')+' · '+(result.seconds??0)+'s';tag.className='tag '+(result.passed?'pass':'fail');header.append(title,tag);article.append(header);
+        const text=document.createElement('p');text.textContent=result.error||result.states?.join(' → ')||(result.installedVersion?'重启版本：'+result.installedVersion:'没有更新，无需下载');article.append(text);
+        const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');summary.textContent='查看请求、预期故障和测试报告';pre.textContent=JSON.stringify(result,null,2);details.append(summary,pre);article.append(details);$('results').append(article);
+      }}
+    }catch(e){$('status').textContent='连接中断：'+e.message}
+  }
+  poll();setInterval(poll,1000);
+</script>
+</body>
+</html>

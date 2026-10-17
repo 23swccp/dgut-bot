@@ -45,8 +45,8 @@ if ($SkipVelopack) {
 }
 dotnet --version | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ".NET 8 SDK is required for Velopack" }
-dotnet tool update --global vpk --version 1.2.0
-if ($LASTEXITCODE -ne 0) { dotnet tool install --global vpk --version 1.2.0 }
+dotnet tool update --global vpk --version 1.2.161
+if ($LASTEXITCODE -ne 0) { dotnet tool install --global vpk --version 1.2.161 }
 $version = (python -c "from version import APP_VERSION; print(APP_VERSION)").Trim()
 vpk pack --packId DgutBot --packVersion $version --packDir dist/dgut-bot --mainExe dgut-bot.exe --packTitle "莞工小皮卡" --packAuthors "23swccp" --icon assets/dgut-bot.ico --runtime win-x64 --noPortable --outputDir Releases
 if ($LASTEXITCODE -ne 0) { throw "Velopack packaging failed" }
