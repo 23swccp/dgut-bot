@@ -82,28 +82,19 @@ jobs:
           dotnet tool install --global vpk --version $env:VELOPACK_VERSION
           vpk download github --repoUrl "https://github.com/${{ github.repository }}" --token $env:GITHUB_TOKEN
           if ($LASTEXITCODE -ne 0) { Write-Host "没有可用的历史 Velopack 包，将仅生成完整更新包。" }
-          vpk pack --packId DgutBot --packVersion $version --packDir dist/dgut-bot --mainExe dgut-bot.exe --packTitle "莞工小皮卡" --packAuthors "23swccp" --icon assets/dgut-bot.ico --runtime win-x64 --noPortable --outputDir Releases
+          vpk pack --packId DgutBot --packVersion $version --packDir dist/dgut-bot --mainExe dgut-bot.exe --packTitle "莞工小皮卡" --packAuthors "23swccp" --icon assets/dgut-bot.ico --runtime win-x64 --noPortable --releaseNotes release-notes.txt --outputDir Releases
           vpk upload github --repoUrl "https://github.com/${{ github.repository }}" --token $env:GITHUB_TOKEN --publish --releaseName "v$version" --tag "${{ github.ref_name }}"
           $release = gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" | ConvertFrom-Json
           $setup = $release.assets | Where-Object { $_.name -eq "DgutBot-win-Setup.exe" }
           if ($null -eq $setup) { throw "未找到 Velopack Setup.exe，无法添加用户下载提示" }
           gh api --method PATCH "repos/${{ github.repository }}/releases/assets/$($setup.id)" -f "name=DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe"
-          @"
-          ## 下载说明
-
-          普通用户请只下载 **DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe**。
-
-          其余文件由应用内自动更新使用，请勿手动下载。
-
-          如果 GitHub 页面或文件下载失败，可前往 [Gitee 备用下载](https://gitee.com/swccq23/dgut-bot/releases/tag/${{ github.ref_name }}) 获取同一安装器。
-
-          应用内更新源仍是 GitHub；应用内更新失败时，请开启支持 GitHub 的网络加速器后重试。
-          "@ | Set-Content -LiteralPath release-download-note.md -Encoding utf8
-          gh release edit "${{ github.ref_name }}" --notes-file release-download-note.md
+          gh release edit "${{ github.ref_name }}" --notes-file release-notes.txt
 
       - name: Publish installer to Gitee mirror
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_UPLOAD_TRANSPORT: curl
+          GITEE_UPLOAD_MAX_TIME: "3600"
           GITEE_OWNER: swccq23
           GITEE_REPO: dgut-bot
           GITEE_TAG: ${{ github.ref_name }}

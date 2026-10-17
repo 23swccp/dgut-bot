@@ -1,7 +1,7 @@
 """Velopack 更新服务到现有浏览器前端状态协议的薄适配层。
 
-版本发现、下载锁、断点文件、完整性校验、安装、稳定启动器与重启全部由
-Velopack SDK/Update.exe 实现；本模块只负责线程调度和 UI 状态展示。
+Python 请求层负责系统代理和 GitHub 传输；版本比较、下载锁、完整性校验、
+安装与重启由 Velopack SDK/Update.exe 实现。
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import queue
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -18,12 +19,12 @@ from urllib.parse import urlparse
 import requests
 import velopack
 
+from .update_transport import UpdateTransport
+
 
 GITHUB_NETWORK_HINT = "请开启支持 GitHub 的网络加速器后重试。"
 CHECK_TIMEOUT_SECONDS = 40.0
-CHECK_REQUEST_TIMEOUT_SECONDS = 15.0
 CHECK_RETRY_DELAY_SECONDS = 1.0
-DOWNLOAD_TIMEOUT_SECONDS = 1800.0
 
 
 def is_transient_update_error(error: Exception) -> bool:
@@ -37,7 +38,7 @@ def update_error_message(error: Exception) -> str:
     message = str(error) or error.__class__.__name__
     text = message.lower()
     if any(word in text for word in ("not properly installed", "not installed", "auto-locate app manifest")):
-        return "当前运行环境缺少 Velopack 安装信息。源码运行不支持自动更新；已安装的程序请使用完整安装器重新安装。"
+        return "当前运行环境缺少 Velopack 安装信息。源码运行可以检查更新，但不能安装；已安装的程序请使用完整安装器重新安装。"
     if "未配置" in message:
         return message
     if re.search(r"\b404\b", text):
@@ -107,6 +108,7 @@ class UpdateManager:
         emit_event: Callable[..., dict[str, Any]] | None = None,
         debug_port: Callable[[], int] | None = None,
         manager_factory: Callable[[], Any] | None = None,
+        transport: UpdateTransport | None = None,
     ) -> None:
         self.root = Path(root)
         self.version = version
@@ -116,6 +118,18 @@ class UpdateManager:
         self.base_url = "http://127.0.0.1:8765"
         self._manager_factory = manager_factory or self._default_manager
         self._custom_manager = manager_factory is not None
+        self._transport = transport or UpdateTransport()
+        self._notes_lock = threading.Lock()
+        self._notes_fetching: set[str] = set()
+        self._notes_cache: dict[str, str] = {}
+        self._notes_path = self.root / "update-release-notes.json"
+        try:
+            saved = json.loads(self._notes_path.read_text(encoding="utf-8"))
+            if saved.get("repository") == repository:
+                self._notes_cache = {k: v for k, v in saved.get("notes", {}).items()
+                                     if isinstance(k, str) and isinstance(v, str)}
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         self._manager: Any | None = None
         self._pending: Any | None = None
         self._lock = threading.RLock()
@@ -141,25 +155,107 @@ class UpdateManager:
     def _default_manager(self) -> Any:
         if not self.repository:
             raise RuntimeError("未配置 GitHub 更新仓库")
-        # 直接读取公开 Release 附件，避免 GithubSource 的匿名 API 限流，
-        # 并使用原生请求超时，保证失败后能释放请求而不是永久占住线程。
-        source = velopack.HttpSource(
-            f"https://github.com/{self.repository}/releases/latest/download",
-            velopack.HttpOptions(Headers=[], TimeoutMilliseconds=int(CHECK_REQUEST_TIMEOUT_SECONDS * 1000)),
-        )
+        # 此 manager 仅用于安装定位、恢复和移交，不执行远程检查/下载。
+        return self._native_manager(velopack.HttpSource(self._feed_url().rsplit("/", 1)[0]))
+
+    def _native_manager(self, source: Any) -> Any:
         return velopack.UpdateManager(source)
 
-    def _manager_for_download(self, update: Any) -> Any:
+    def _feed_url(self) -> str:
+        if not self.repository:
+            raise RuntimeError("未配置 GitHub 更新仓库")
+        return f"https://github.com/{self.repository}/releases/latest/download/releases.win.json"
+
+    def _package_url(self, asset: Any) -> str:
+        from urllib.parse import quote
+        return f"https://github.com/{self.repository}/releases/download/v{quote(str(asset.Version), safe='')}/{quote(asset.FileName, safe='')}"
+
+    def _query_update(self) -> Any:
         if self._custom_manager:
-            return self._get_manager()
-        asset = getattr(update, "TargetFullRelease", update)
-        # 发布标签固定为 v<version>。锁定检测到的版本，避免下载期间发布新版
-        # 导致 latest 切换，并为大包保留独立的传输超时。
-        source = velopack.HttpSource(
-            f"https://github.com/{self.repository}/releases/download/v{asset.Version}",
-            velopack.HttpOptions(Headers=[], TimeoutMilliseconds=int(DOWNLOAD_TIMEOUT_SECONDS * 1000)),
-        )
-        return velopack.UpdateManager(source)
+            return self._get_manager().check_for_updates()
+        feed = self._transport.read(self._feed_url())
+        with tempfile.TemporaryDirectory(prefix="dgut-update-feed-") as directory:
+            source = str(Path(directory))
+            (Path(directory) / "releases.win.json").write_bytes(feed)
+            try:
+                manager = self._native_manager(source)
+            except Exception as error:
+                if not self._missing_install(error):
+                    raise
+                # 仅给 SDK 提供当前版本做比较。临时定位绝不用于下载或安装。
+                with tempfile.TemporaryDirectory(prefix="dgut-update-check-") as directory:
+                    root = Path(directory)
+                    (root / "packages").mkdir()
+                    (root / "Update.exe").touch()
+                    from xml.sax.saxutils import escape
+                    (root / "sq.version").write_text(
+                        '<package><metadata><id>DgutBot</id><version>' + escape(self.version) +
+                        '</version><title>DgutBot</title><authors>DgutBot</authors>'
+                        '<mainExe>DgutBot.exe</mainExe><channel>win</channel></metadata></package>', encoding="utf-8")
+                    locator = velopack.VelopackLocatorConfig(root, root / "Update.exe", root / "packages",
+                                                          root / "sq.version", root, True)
+                    return velopack.UpdateManager(source, locator=locator).check_for_updates()
+            return manager.check_for_updates()
+
+    @staticmethod
+    def _missing_install(error: Exception) -> bool:
+        return any(word in str(error).lower() for word in ("not properly installed", "not installed", "auto-locate app manifest"))
+
+    def _download_update(self, update: Any, progress: Callable[[int], None]) -> None:
+        if self._custom_manager:
+            self._get_manager().download_updates(update, progress)
+            return
+        # 下载前确认真实安装定位；源码检查生成的临时定位不会保存在这里。
+        self._get_manager()
+        asset = update.TargetFullRelease
+        name = asset.FileName
+        if not name or name in {".", ".."} or any(c in name for c in '/\\:%?#') or name.endswith((" ", ".")):
+            raise ValueError("更新包文件名无效")
+        self.root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="dgut-update-package-", dir=self.root) as directory:
+            source = Path(directory)
+            self._transport.download(self._package_url(asset), source / name, int(asset.Size), progress)
+            self._set("verifying")
+            # 本地目录源避免 SDK 再经过任何代理。取完整包，仍由 SDK 校验后放入安装缓存。
+            full_update = velopack.UpdateInfo(asset, [], update.IsDowngrade)
+            self._native_manager(str(source)).download_updates(full_update, lambda value: progress(95 + int(value) // 20))
+
+    def _refresh_notes(self, asset: Any) -> None:
+        if self._custom_manager:
+            return
+        version = str(asset.Version)
+        with self._notes_lock:
+            if version in self._notes_fetching:
+                return
+            self._notes_fetching.add(version)
+
+        def fetch() -> None:
+            try:
+                notes = self._transport.release_notes(self.repository, version)
+                if notes is None:
+                    return
+                with self._lock:
+                    self._notes_cache[version] = notes
+                    self._notes_cache = dict(list(self._notes_cache.items())[-5:])
+                    if self._state["latestVersion"] == version:
+                        self._state["changelog"] = notes
+                    payload = {"repository": self.repository, "notes": dict(self._notes_cache)}
+                with self._notes_lock:
+                    self.root.mkdir(parents=True, exist_ok=True)
+                    temporary = self._notes_path.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                    temporary.replace(self._notes_path)
+            except Exception:
+                pass  # 说明是可选信息，限流或网络失败不能改变版本检查/下载状态。
+            finally:
+                with self._notes_lock:
+                    self._notes_fetching.discard(version)
+
+        threading.Thread(target=fetch, name="update-release-notes", daemon=True).start()
+
+    def _notes(self, asset: Any) -> str:
+        with self._lock:
+            return self._notes_cache.get(str(asset.Version), str(getattr(asset, "NotesMarkdown", "") or ""))
 
     def _get_manager(self) -> Any:
         # SDK 初始化不能占用 UI 状态锁，否则超时和状态轮询也会被阻塞。
@@ -220,11 +316,12 @@ class UpdateManager:
             self._set(
                 "ready_to_install",
                 latestVersion=str(pending.Version),
-                changelog=str(getattr(pending, "NotesMarkdown", "") or ""),
+                changelog=self._notes(pending),
                 total=int(getattr(pending, "Size", 0) or 0),
                 downloaded=int(getattr(pending, "Size", 0) or 0),
                 percent=100,
             )
+            self._refresh_notes(pending)
 
     def set_ports(self, base_url: str, _frontend_port: int) -> None:
         self.base_url = base_url
@@ -254,7 +351,7 @@ class UpdateManager:
             "error": state["error"],
             "messages": messages,
             "unreadCount": sum(not item.get("read", False) for item in messages),
-            "downloading": state["state"] == "downloading",
+            "downloading": state["state"] in {"downloading", "verifying"},
             "handoff": state["state"] in {"handoff", "waiting_for_exit"},
             "readyForExit": state["state"] == "waiting_for_exit",
             "canInstall": state["state"] == "ready_to_install",
@@ -264,7 +361,9 @@ class UpdateManager:
 
     def check(self, manual: bool = False) -> dict[str, Any]:
         with self._lock:
-            if self._state["state"] in {"checking", "downloading", "ready_to_install", "handoff", "waiting_for_exit"}:
+            if self._state["state"] in {"checking", "downloading", "verifying", "ready_to_install", "handoff", "waiting_for_exit"}:
+                if manual and self._state["state"] == "ready_to_install" and self._pending is not None:
+                    self._refresh_notes(getattr(self._pending, "TargetFullRelease", self._pending))
                 return {"ok": True, "skipped": True}
             if self._check_thread and self._check_thread.is_alive():
                 # Python 无法取消 SDK 的原生请求。保留单个请求，避免并发借用
@@ -280,13 +379,17 @@ class UpdateManager:
 
         def query() -> None:
             try:
-                manager = self._get_manager()
-                pending = manager.get_update_pending_restart()
+                try:
+                    pending = self._get_manager().get_update_pending_restart()
+                except Exception as error:
+                    if self._custom_manager or not self._missing_install(error):
+                        raise
+                    pending = None
                 update = None
                 if pending is None:
                     for attempt in range(2):
                         try:
-                            update = manager.check_for_updates()
+                            update = self._query_update()
                             break
                         except Exception as error:
                             if attempt or not is_transient_update_error(error):
@@ -320,8 +423,9 @@ class UpdateManager:
         if pending is not None:
             self._pending = pending
             asset = pending
-            self._set("ready_to_install", latestVersion=str(asset.Version), changelog=str(asset.NotesMarkdown or ""),
+            self._set("ready_to_install", latestVersion=str(asset.Version), changelog=self._notes(asset),
                       downloaded=int(asset.Size or 0), total=int(asset.Size or 0), percent=100)
+            self._refresh_notes(asset)
             return {"ok": True, "updateAvailable": True, "version": str(asset.Version), "downloaded": True}
         if update is None:
             self._pending = None
@@ -331,10 +435,11 @@ class UpdateManager:
             return {"ok": True, "updateAvailable": False}
         self._pending = update
         asset = update.TargetFullRelease
-        self._set("available", latestVersion=str(asset.Version), changelog=str(asset.NotesMarkdown or ""),
+        self._set("available", latestVersion=str(asset.Version), changelog=self._notes(asset),
                   downloaded=0, total=int(asset.Size or 0), percent=0, error="")
         self._add_message("info", f"发现新版本 v{asset.Version}", str(asset.NotesMarkdown or "本次更新。")[:200])
-        self._start_download_thread()
+        self._refresh_notes(asset)
+        # 发现版本只通知前端，用户确认后通过 download_update 开始下载。
         return {"ok": True, "updateAvailable": True, "version": str(asset.Version)}
 
     def start_auto_check(self, delay: float = 5.0) -> None:
@@ -351,7 +456,7 @@ class UpdateManager:
 
     def start_download(self) -> dict[str, Any]:
         with self._lock:
-            if self._state["state"] in {"checking", "downloading", "ready_to_install", "handoff", "waiting_for_exit"}:
+            if self._state["state"] in {"checking", "downloading", "verifying", "ready_to_install", "handoff", "waiting_for_exit"}:
                 return {"ok": True, "skipped": True}
             if self._check_thread and self._check_thread.is_alive():
                 return {"ok": False, "error": "上次更新请求仍未结束，请稍后重试；若持续无响应，请重启程序。"}
@@ -380,7 +485,7 @@ class UpdateManager:
             self._set(downloaded=round(total * value / 100), total=total, percent=value)
 
         try:
-            self._manager_for_download(update).download_updates(update, progress)
+            self._download_update(update, progress)
         except Exception as error:
             display = update_error_message(error)
             self._add_message("error", f"⚠ v{self._state['latestVersion']} 下载失败", display)

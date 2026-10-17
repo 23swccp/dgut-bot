@@ -28,6 +28,8 @@ update_failures.json
 release/
 Releases/
 update-ui-state.json
+update-release-notes.json
+update-release-notes.tmp
 .smoke-data/
 .course-lab/
 .update-lab/

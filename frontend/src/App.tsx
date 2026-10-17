@@ -5,14 +5,14 @@ import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
 } from "./courseObservability";
-import { stateLabel, toastFor, type UpdateStatus } from "./updateClient";
-import { UpdateBell, UpdateDrawer, UpdateFailureDialog, UpdateToast, useScrollRestore } from "./UpdateDrawer";
+import { type UpdateStatus } from "./updateClient";
+import { UpdateSettings } from "./UpdateSettings";
+import { UpdateDialog, useUpdateDialog } from "./UpdateDialog";
 import { AboutGuide } from "./AboutGuide";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
 import { IndependentLoginPanel } from "./IndependentLoginPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStatus, type LessonItem } from "./courseScanView";
-import "./updateDrawer.css";
 import "./courseScan.css";
 import "./homeworkInput.css";
 
@@ -88,14 +88,12 @@ function App() {
   const [exitingLearning, setExitingLearning] = useState(false);
   const [saved, setSaved] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const handoffSentRef = useRef(false);
-  const autoOpenedUpdateRef = useRef("");
   const signInitializationStartedRef = useRef(false);
   const greetedLoginRef = useRef("");
   const learningScanStartedRef = useRef(false);
-  const drawerScroll = useScrollRestore(drawerOpen);
+  const updateDialog = useUpdateDialog(updateStatus);
   const signLogRef = useRef<HTMLDivElement>(null);
   const commandRef = useRef<HTMLInputElement>(null);
   const learningEndRef = useRef<HTMLPreElement>(null);
@@ -275,20 +273,7 @@ function App() {
     const timer = window.setInterval(() => void pullUpdate(), 1000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, []);
-  // 每个新版本只自动展开一次；用户手动收起后，本次运行不再反复打扰。
-  useEffect(() => {
-    const state = updateStatus?.state;
-    const version = updateStatus?.latestVersion || "";
-    const canShowDrawer = page === "terminal" || page === "learning";
-    const shouldOpen = state === "available"
-      || state === "downloading"
-      || state === "verifying"
-      || state === "ready_to_install";
-    if (!canShowDrawer || !shouldOpen || !version || autoOpenedUpdateRef.current === version) return;
-    autoOpenedUpdateRef.current = version;
-    setDrawerOpen(true);
-    void call("mark_update_read");
-  }, [page, updateStatus?.latestVersion, updateStatus?.state]);
+  useEffect(() => { if (page === "settings") void call("mark_update_read"); }, [page, updateStatus?.messages[0]?.id]);
   // 移交确认后由后端先接收关机请求，再通过 CDP 精确关闭助手标签页。
   useEffect(() => {
     if (!updateStatus?.readyForExit || handoffSentRef.current) return;
@@ -298,12 +283,6 @@ function App() {
       void call("shutdown_for_update");
     }, 700);
   }, [updateStatus?.readyForExit]);
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setDrawerOpen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [drawerOpen]);
 
   async function call(commandName: string, payload: Record<string, unknown> = {}): Promise<BackendResult> {
     try {
@@ -392,29 +371,17 @@ function App() {
     if (busy) return; setBusy(true); const result = await call("open_log", { path: logPath }); setBusy(false);
     if (!result.ok) save(result.error || "无法打开日志文件");
   }
-  function toggleDrawer() {
-    setDrawerOpen(open => {
-      const next = !open;
-      if (next) void call("mark_update_read");
-      return next;
-    });
-  }
   async function checkUpdate() {
     const result = await call("check_update");
-    if (!result.ok) save(result.error || "无法检查更新");
+    if (!result.ok) setUpdateStatus(current => current && { ...current, error: result.error || "无法检查更新" });
   }
   async function installUpdate() {
     const result = await call("install_update");
-    if (!result.ok) save(result.error || "无法开始安装");
+    if (!result.ok) { setUpdateStatus(current => current && { ...current, error: result.error || "无法开始安装" }); setPage("settings"); }
   }
   async function retryDownload() {
     const result = await call("download_update");
-    if (!result.ok) save(result.error || "无法开始下载");
-  }
-  async function ackFailure(action: "later" | "redownload" | "log") {
-    await call("ack_update_failure");
-    if (action === "log") { await call("open_log", { path: "browser-service.log" }); return; }
-    if (action === "redownload") { setDrawerOpen(true); await retryDownload(); }
+    if (!result.ok) { setUpdateStatus(current => current && { ...current, error: result.error || "无法开始下载" }); setPage("settings"); }
   }
   async function chooseSignCourse(course: Course) {
     if (busy) return;
@@ -589,31 +556,10 @@ function App() {
     if (target) learningAutoScrollRef.current = target.scrollHeight - target.scrollTop - target.clientHeight < 36;
   };
 
-  const updateToast = updateStatus ? toastFor(updateStatus) : null;
-  const showHeaderUpdate = page === "terminal" || page === "learning";
-  const updateSettingLabel = updateStatus?.state === "checking"
-    ? stateLabel("checking")
-    : updateStatus?.error
-      ? updateStatus.error
-      : updateStatus
-        ? stateLabel(updateStatus.state)
-        : "正在读取更新状态…";
   return <div className="app-shell"><main className="content">
     <button className="settings" aria-label={sidebarOpen ? "收起侧边面板" : "打开侧边面板"} title={sidebarOpen ? "收起侧边面板" : "打开侧边面板"} onClick={() => setSidebarOpen(open => !open)} />
     {saved && <div className="toast">✓ {saved}</div>}
-    <UpdateToast view={updateToast} onOpen={toggleDrawer} />
-    <UpdateDrawer status={updateStatus} open={drawerOpen && showHeaderUpdate} scroll={drawerScroll} actions={{
-      onClose: () => setDrawerOpen(false),
-      onInstall: () => void installUpdate(),
-      onPostpone: () => setDrawerOpen(false),
-      onRetryDownload: () => void retryDownload(),
-    }} />
-    {updateStatus?.pendingFailureDialog && <UpdateFailureDialog
-      dialog={updateStatus.pendingFailureDialog}
-      onViewLog={() => void ackFailure("log")}
-      onLater={() => void ackFailure("later")}
-      onRedownload={() => void ackFailure("redownload")}
-    />}
+    <UpdateDialog open={updateDialog.open} status={updateStatus} onClose={updateDialog.hide} onDownload={retryDownload} onInstall={installUpdate}/>
     <section className={`workspace ${sidebarOpen ? "sidebar-open" : ""}`}>
       <AnimatePresence initial={false}>
         {sidebarOpen && <motion.aside
@@ -623,10 +569,9 @@ function App() {
           animate={{ width: 260, x: 0, opacity: 1 }}
           exit={reduceMotion ? { width: 0 } : { width: 0, x: -18, opacity: 0 }}
           transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => { setPage(item); if (item === "settings" || item === "about" || item === "account") setDrawerOpen(false); }} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
+        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
-      {showHeaderUpdate && <UpdateBell status={updateStatus} open={drawerOpen} onToggle={toggleDrawer} />}
       {page === "terminal" && <section className={`terminal sign-terminal ${phase === "courses" ? "course-picking" : ""}`}>
         {(signStatus.recoveryPending || signStatus.recoveryError) && <aside className="course-recovery-notice" role="status" aria-live="polite"><strong>{signStatus.recoveryCourseName || "课程"} · {signStatus.membershipPhase === "withdrawn" ? "已临时退课" : "待恢复原班级"}</strong><p>{signStatus.recoveryError || signStatus.lastResult}</p>{signStatus.recoveryPending && <button className="secondary" disabled={busy} onClick={async () => { setBusy(true); const result = await call("recover_course_membership"); setBusy(false); if (result.signStatus) setSignStatus(result.signStatus); if (!result.ok) append(result.error || "恢复失败，记录已保留"); }}>立即加回并停止</button>}</aside>}
         <div className="sign-event-log" ref={signLogRef} aria-label="签到关键事件">
@@ -715,7 +660,7 @@ function App() {
         <Card title="账号登录恢复"><div className="setting-line"><span>启用账号密码自动重新登录</span><button type="button" aria-label="启用账号密码自动重新登录" onClick={() => setAccountEnabled(!accountEnabled)} className={`switch ${accountEnabled ? "on" : ""}`}><i /></button></div>{accountEnabled && <div className="account-fields"><input className="field" value={accountName} onChange={event => setAccountName(event.target.value)} placeholder="学号" autoComplete="username" maxLength={64}/><input className="field" type="password" value={accountPassword} onChange={event => setAccountPassword(event.target.value)} placeholder={hasSavedPassword ? "密码已保存；留空则不修改" : "密码"} autoComplete="current-password" maxLength={256}/></div>}</Card>
         <Card title="刷课"><label className="setting-field"><span>视频倍速</span><input className="field rate-field" type="number" min="1" max="16" step="0.5" value={playbackRate} onChange={event => setPlaybackRate(Math.min(16, Math.max(1, Number(event.target.value) || 1)))}/></label><div className="setting-line"><span>自动答题</span><button type="button" aria-label="自动答题" onClick={toggleQuizAutoAnswer} className={`switch ${quizAutoAnswer ? "on" : ""}`}><i /></button></div>{quizAutoAnswer && <div className="quiz-answer-options"><div className="setting-line"><span>选择题</span><button type="button" aria-label="自动回答选择题" onClick={toggleQuizChoice} className={`switch ${quizChoiceEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>判断题</span><button type="button" aria-label="自动回答判断题" onClick={toggleQuizJudgment} className={`switch ${quizJudgmentEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>填空题</span><button type="button" aria-label="自动回答填空题" onClick={toggleQuizBlank} className={`switch ${quizBlankEnabled ? "on" : ""}`}><i /></button></div></div>}</Card>
         <Card title="日志与数据"><div className="setting-line"><span>保存签到与错误详情</span><button type="button" aria-label="保存签到与错误详情" onClick={() => setLogging(!logging)} className={`switch ${logging ? "on" : ""}`}><i /></button></div><div className="log-path-row"><input className="field" value={logPath} onChange={event => setLogPath(event.target.value)}/><button className="secondary" disabled={busy} onClick={openLog}>打开日志</button></div></Card>
-        <Card title="软件更新"><div className="setting-line update-setting-line"><span><strong>当前版本 v{appInfo?.version || updateStatus?.currentVersion || "…"}</strong><small>{updateSettingLabel}</small><small>网络连接失败可开启支持 GitHub 的加速器后重试</small></span><button type="button" className="secondary" disabled={updateStatus?.state === "checking"} onClick={() => void checkUpdate()}>{updateStatus?.state === "checking" ? "检查中…" : "检查更新"}</button></div></Card>
+        <UpdateSettings status={updateStatus} version={appInfo?.version || ""} onCheck={() => { updateDialog.show(); void checkUpdate(); }} onOpen={updateDialog.show}/>
         </div>
         <div className="actions settings-save"><button className="primary" disabled={busy} onClick={saveAllSettings}>{busy ? "保存中…" : "保存全部设置"}</button></div>
       </SettingsSection>}

@@ -1,4 +1,4 @@
-// 更新状态的纯逻辑：格式化、标签映射与 Toast 派生；全部可单测。
+// 更新状态、下载进度和展示标签。
 
 export type UpdateState =
   | "idle"
@@ -93,50 +93,4 @@ export function stateLabel(state: UpdateState): string {
     completed: "已是最新版本",
   };
   return labels[state] || state;
-}
-
-export type ToastView = {
-  key: string;
-  mode: "progress" | "done" | "error" | "handoff";
-  title: string;
-  percent: number;
-  bytes: string;
-  sticky: boolean;
-};
-
-const ACTIVE_TOAST_STATES: readonly UpdateState[] = [
-  "downloading", "verifying", "ready_to_install", "download_failed", "handoff", "waiting_for_exit", "completed",
-];
-
-export function toastFor(status: UpdateStatus): ToastView | null {
-  if (!ACTIVE_TOAST_STATES.includes(status.state)) return null;
-  const version = status.latestVersion || "";
-  const key = `${status.state}-${version}`;
-  switch (status.state) {
-    case "downloading":
-      return {
-        key, mode: "progress", sticky: true,
-        title: `正在下载 v${version}`, percent: downloadPercent(status),
-        bytes: `${formatBytes(status.downloaded)} / ${formatBytes(status.total)}`,
-      };
-    case "verifying":
-      return { key, mode: "progress", sticky: true, title: `正在校验 v${version}…`, percent: 100, bytes: "" };
-    case "ready_to_install":
-      return { key, mode: "done", sticky: true, title: `✓ v${version} 更新已准备好`, percent: 100, bytes: "" };
-    case "download_failed":
-      return { key, mode: "error", sticky: false, title: `⚠ v${version} 下载失败`, percent: 0, bytes: "" };
-    case "handoff":
-    case "waiting_for_exit":
-      return { key, mode: "handoff", sticky: true, title: "正在移交给更新器……", percent: 100, bytes: "" };
-    case "completed":
-      return { key, mode: "done", sticky: false, title: `✓ 已更新到 v${version || status.currentVersion}`, percent: 100, bytes: "" };
-    default:
-      return null;
-  }
-}
-
-// 下载中只在进度条宽度上变化，不重放进场动画：key 只随模式与版本变化。
-export function toastAnimationKey(view: ToastView): string {
-  const version = view.key.split("-").slice(1).join("-");
-  return `${view.mode}-${version}`;
 }

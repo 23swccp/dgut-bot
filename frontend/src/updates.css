@@ -1,0 +1,47 @@
+.software-update { padding: 24px; }
+.update-panel-heading { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.update-panel-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; color: #258259; background: #ecf6ef; flex-shrink: 0; }
+.update-panel-heading h3 { margin: 0 0 5px; }
+.update-panel-heading p { margin: 0; color: #7b8495; font-size: 12px; }
+.update-panel-state { margin-left: auto; padding: 6px 10px; border-radius: 7px; color: #287451; background: #eef6f0; font-size: 12px; }
+.update-panel-state.error { color: #a64739; background: #fcf0eb; }
+.update-version-line { display: flex; align-items: center; gap: 14px; margin: 24px 0 12px; font-size: 19px; color: #929ca4; }
+.update-version-line strong { color: #2c7453; }
+.update-changelog { padding: 16px 18px; border: 1px solid #e8eee9; background: #fafcf9; border-radius: 12px; margin: 18px 0; max-height: 320px; overflow: auto; }
+.update-changelog h4 { margin: 0 0 12px; font-size: 13px; }
+.update-changelog .md-paragraph, .update-changelog .md-list-item { font-size: 13px; color: #53635d; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-changelog .md-list-item::before { content: "• "; color: #38865f; }
+.update-changelog h5, .update-changelog h6 { margin: 12px 0 6px; }
+.update-changelog .md-code { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f0f4ef; border-radius: 7px; }
+.update-changelog a { color: #287b53; }
+.update-panel-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 20px 0 12px; }
+.update-panel-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin: 0; }
+.update-download-progress { margin: 20px 0; }
+.update-download-progress > div { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; font-size: 12px; color: #648171; }
+.update-download-progress progress { width: 100%; height: 7px; border: 0; border-radius: 5px; overflow: hidden; accent-color: #38865f; }
+.update-download-progress progress::-webkit-progress-bar { background: #eaf0e8; }
+.update-download-progress progress::-webkit-progress-value { background: #38865f; border-radius: 5px; }
+.update-panel-error { padding: 12px 14px; border-radius: 9px; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.update-panel-error { background: #fff2ee; color: #9e493c; }
+@media (max-width: 600px) { .software-update { padding: 18px; }.update-panel-state { margin-left: 0; }.update-download-progress > div { flex-wrap: wrap; } }
+
+.software-update-dialog { width: min(580px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); box-sizing: border-box; padding: 0; border: 1px solid #e1e8e0; border-radius: 20px; background: #fff; color: #283d32; box-shadow: 0 24px 100px #102d2a33; }
+.software-update-dialog[open] { display: flex; flex-direction: column; }
+.software-update-dialog::backdrop { background: #152b2859; backdrop-filter: blur(3px); }
+.update-dialog-heading { display: flex; align-items: center; gap: 14px; padding: 26px 28px 20px; flex-shrink: 0; }
+.update-dialog-heading h2 { margin: 0 0 9px; font-size: 22px; font-weight: 650; }
+.update-dialog-versions { display: flex; align-items: center; gap: 12px; color: #8a9690; font-size: 14px; }
+.update-dialog-versions strong { color: #287b53; font-weight: 600; }
+.update-dialog-close { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; margin: 0 0 auto auto; background: transparent; color: #8b9890; cursor: pointer; }
+.update-dialog-close:hover { background: #f0f4ef; color: #344c3e; }
+.update-dialog-body { min-height: 0; overflow: auto; padding: 0 28px 22px; }
+.update-dialog-body .update-changelog { margin: 0; max-height: none; padding: 18px 20px; background: #f8faf6; border-color: #edf1e9; }
+.update-dialog-body .update-changelog h4, .update-dialog-body .update-changelog h5, .update-dialog-body .update-changelog h6 { margin-top: 0; font-size: 14px; }
+.update-dialog-body .update-changelog .md-list-item { margin: 7px 0; }
+.update-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 18px 28px; border-top: 1px solid #edf0eb; background: #fbfcfa; flex-shrink: 0; }
+.update-dialog-footer button { min-width: 96px; margin: 0; }
+.update-dialog-status { display: flex; align-items: center; gap: 8px; margin: 18px 0 0; color: #6a7b70; font-size: 13px; }
+.update-spinner { animation: update-spin 1s linear infinite; }
+@keyframes update-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .update-spinner { animation: none; } }
+@media (max-width: 600px) { .update-dialog-heading { padding: 22px 20px 18px; }.update-dialog-body { padding: 0 20px 18px; }.update-dialog-footer { padding: 16px 20px; }.update-dialog-heading h2 { font-size: 20px; } }

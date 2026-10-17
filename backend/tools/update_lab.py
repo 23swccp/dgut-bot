@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 import velopack
 from dgutbot.app.updater import UpdateManager
+from dgutbot.app.update_transport import UpdateTransport
 
 CASES = {
     "success": "正常检查、下载和校验",
@@ -186,6 +187,11 @@ class FeedServer:
         self.thread.join(2)
 
 
+class LabTransport(UpdateTransport):
+    def release_notes(self, repository, version):
+        return None  # 离线实验不得访问正式 GitHub API。
+
+
 class LabManager(UpdateManager):
     """仅替换传输和安装位置；检查、下载、消息、恢复沿用产品实现。"""
     def __init__(self, root, origin, *, allow_install=False):
@@ -196,19 +202,17 @@ class LabManager(UpdateManager):
         self.install_root = root
         self.origin = origin
         self.allow_install = allow_install
-        super().__init__(root / "user-data", version=OLD_VERSION, repository="local/update-lab")
+        super().__init__(root / "user-data", version=OLD_VERSION, repository="local/update-lab",
+                         transport=LabTransport(check_timeout=0.4, download_timeout=2))
 
-    def native(self, path, timeout):
-        source = velopack.HttpSource(
-            self.origin + path, velopack.HttpOptions(Headers=[], TimeoutMilliseconds=timeout),
-        )
+    def _native_manager(self, source):
         return velopack.UpdateManager(source, locator=locator(self.install_root))
 
-    def _default_manager(self):
-        return self.native("/releases/latest/download", 400)
+    def _feed_url(self):
+        return self.origin + "/releases/latest/download/releases.win.json"
 
-    def _manager_for_download(self, update):
-        return self.native(f"/releases/download/v{update.TargetFullRelease.Version}", 2000)
+    def _package_url(self, asset):
+        return self.origin + f"/releases/download/v{asset.Version}/{asset.FileName}"
 
     def install(self):
         if not self.allow_install:
@@ -262,6 +266,9 @@ def run_case(case, base):
                 require(not check["updateAvailable"], "同版本或旧版本不能触发升级")
                 require(not list((root / "packages").glob("*.nupkg")), "没有更新时不得下载")
             else:
+                require(manager.snapshot()["state"] == "available", "检查后必须等待用户确认下载")
+                require(not list((root / "packages").glob("*.nupkg")), "用户确认前不得下载更新包")
+                require(manager.start_download()["ok"], "下载请求未被接受")
                 snapshot = wait_state(manager, {"ready_to_install", "download_failed"}, history)
                 if case in {"truncated", "checksum"}:
                     require(snapshot["state"] == "download_failed", "损坏下载必须被拒绝")
@@ -360,6 +367,7 @@ def handoff_worker(root, origin):
     manager = LabManager(root, origin, allow_install=True)
     history = []
     require(manager.check()["ok"], "夹具检查失败")
+    require(manager.start_download()["ok"], "夹具下载失败")
     wait_state(manager, {"ready_to_install"}, history)
     require(manager.install()["ok"], "夹具移交失败")
     wait_state(manager, {"waiting_for_exit"}, history)

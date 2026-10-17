@@ -85,6 +85,9 @@ class VelopackAdapterTests(unittest.TestCase):
             manager = self.make_manager(Path(directory), fake)
             result = manager.check()
             self.assertTrue(result["updateAvailable"])
+            self.assertEqual(manager.snapshot()["state"], "available")
+            self.assertEqual(fake.download_calls, 0)
+            self.assertTrue(manager.start_download()["ok"])
             snapshot = wait_state(manager, "ready_to_install")
             self.assertEqual(snapshot["latestVersion"], "0.3.0")
             self.assertEqual(snapshot["percent"], 100)
@@ -123,6 +126,7 @@ class VelopackAdapterTests(unittest.TestCase):
             fake = FakeVelopackManager(download_error=RuntimeError("network down"))
             manager = self.make_manager(Path(directory), fake)
             manager.check()
+            manager.start_download()
             snapshot = wait_state(manager, "download_failed")
             self.assertIn("network down", snapshot["error"])
             self.assertIn("网络加速器", snapshot["error"])
@@ -170,6 +174,7 @@ class VelopackAdapterTests(unittest.TestCase):
             fake = FakeVelopackManager(download_error=RuntimeError("connection reset"))
             manager = self.make_manager(Path(directory), fake)
             manager.check()
+            manager.start_download()
             wait_state(manager, "download_failed")
             fake.check_error = RuntimeError("HTTP status: 404")
             self.assertFalse(manager.check()["ok"])
@@ -187,17 +192,12 @@ class VelopackAdapterTests(unittest.TestCase):
             query.assert_not_called()
             self.assertTrue(manager.snapshot()["canInstall"])
 
-    def test_http_sources_have_separate_timeouts_and_pin_download_version(self):
+    def test_download_pins_each_package_to_its_version(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = UpdateManager(Path(directory), version="0.2.6", repository="owner/repo")
-            with patch("velopack_updater.velopack.HttpSource") as source, patch("velopack_updater.velopack.UpdateManager"):
-                manager._get_manager()
-                manager._manager_for_download(FakeUpdate())
-            check, download = source.call_args_list
-            self.assertEqual(check.args[0], "https://github.com/owner/repo/releases/latest/download")
-            self.assertEqual(check.args[1].TimeoutMilliseconds, 15000)
-            self.assertEqual(download.args[0], "https://github.com/owner/repo/releases/download/v0.3.0")
-            self.assertEqual(download.args[1].TimeoutMilliseconds, 1800000)
+            asset = FakeAsset()
+            asset.FileName = "DgutBot-0.3.0-full.nupkg"
+            self.assertEqual(manager._package_url(asset), "https://github.com/owner/repo/releases/download/v0.3.0/DgutBot-0.3.0-full.nupkg")
 
     def test_startup_network_failure_retries_later_but_install_error_does_not(self):
         for retryable, expected in ((True, 3), (False, 1)):

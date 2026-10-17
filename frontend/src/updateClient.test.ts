@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, downloadPercent, stateLabel, toastFor, toastAnimationKey, type UpdateStatus } from "./updateClient";
+import { formatBytes, downloadPercent, stateLabel, type UpdateStatus } from "./updateClient";
 import { parseInline, parseSafeMarkdown, safeHref } from "./safeMarkdown";
+import { updateNoticeKey, UpdateNoticeMemory } from "./updatePrompts";
 
 const status = (patch: Partial<UpdateStatus>): UpdateStatus => ({
   currentVersion: "0.2.0",
@@ -24,7 +25,7 @@ const status = (patch: Partial<UpdateStatus>): UpdateStatus => ({
 });
 
 describe("update formatting helpers", () => {
-  it("formats byte counts like the progress toast", () => {
+  it("formats byte counts for the update settings", () => {
     expect(formatBytes(0)).toBe("0.0 B");
     expect(formatBytes(8_500_000)).toBe("8.1 MB");
     expect(formatBytes(19_400_000)).toBe("18.5 MB");
@@ -41,34 +42,34 @@ describe("update formatting helpers", () => {
   });
 });
 
-describe("update toast derivation", () => {
-  it("shows a progress toast with percent while downloading", () => {
-    const view = toastFor(status({ state: "downloading", downloaded: 8_100_000, total: 19_400_000 }))!;
-    expect(view.mode).toBe("progress");
-    expect(view.title).toBe("正在下载 v0.3.0");
-    expect(view.percent).toBe(42);
-    expect(view.bytes).toBe("7.7 MB / 18.5 MB");
+describe("update dialog notices", () => {
+  it("separates discovery, progress, readiness and failure without executing actions", () => {
+    const available = updateNoticeKey(status({ state: "available" }));
+    const ready = updateNoticeKey(status({ state: "ready_to_install", canInstall: true }));
+    expect(available).toContain("available:");
+    expect(ready).toContain("ready:");
+    expect(updateNoticeKey(status({ state: "downloading" }))).toBe(updateNoticeKey(status({ state: "verifying" })));
+    expect(updateNoticeKey(status({ state: "download_failed", error: "连接中断" }))).toContain("failed:");
+    for (const state of ["idle", "checking", "handoff"] as const) expect(updateNoticeKey(status({ state }))).toBeNull();
+    expect(updateNoticeKey(status({ state: "available", latestVersion: "" }))).toBeNull();
   });
 
-  it("turns into ready state without progress replay", () => {
-    const downloading = toastFor(status({ state: "downloading", downloaded: 1, total: 2 }))!;
-    const again = toastFor(status({ state: "downloading", downloaded: 2, total: 2 }))!;
-    expect(toastAnimationKey(downloading)).toBe(toastAnimationKey(again));
-    const done = toastFor(status({ state: "ready_to_install" }))!;
-    expect(done.mode).toBe("done");
-    expect(done.title).toContain("更新已准备好");
-    expect(toastAnimationKey(done)).not.toBe(toastAnimationKey(downloading));
+  it("remembers a displayed stage across polling and page refresh", () => {
+    const values = new Map<string, string>();
+    const storage = { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => { values.set(key, value); } };
+    const key = updateNoticeKey(status({ state: "available" }))!;
+    const memory = new UpdateNoticeMemory(storage);
+    expect(memory.claim(key)).toBe(true);
+    expect(memory.claim(key)).toBe(false);
+    expect(new UpdateNoticeMemory(storage).claim(key)).toBe(false);
+    expect(memory.claim(updateNoticeKey(status({ state: "ready_to_install", canInstall: true }))!)).toBe(true);
+    expect(memory.claim(updateNoticeKey(status({ state: "available", latestVersion: "0.4.0" }))!)).toBe(true);
   });
 
-  it("switches to error toast on download failure", () => {
-    const view = toastFor(status({ state: "download_failed" }))!;
-    expect(view.mode).toBe("error");
-    expect(view.title).toBe("⚠ v0.3.0 下载失败");
-  });
-
-  it("stays quiet when idle or available", () => {
-    expect(toastFor(status({ state: "idle" }))).toBeNull();
-    expect(toastFor(status({ state: "available" }))).toBeNull();
+  it("deduplicates notifications even when storage is unavailable", () => {
+    const memory = new UpdateNoticeMemory({ getItem: () => { throw Error("blocked"); }, setItem: () => { throw Error("blocked"); } });
+    expect(memory.claim("available:0.2:0.3")).toBe(true);
+    expect(memory.claim("available:0.2:0.3")).toBe(false);
   });
 });
 
