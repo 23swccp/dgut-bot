@@ -44,6 +44,10 @@ update-release-notes.tmp
 build/
 dist/
 
-# Markdown 文档仅在仓库保留根目录 README.md
+# Markdown 文档仅在仓库保留根目录 README.md 与开发文档
 *.md
 !/README.md
+!/开发文档.md
+
+# 视觉工具产物（截图、裁剪图等，可能含真实界面）
+.dsh-vision-toolkit/

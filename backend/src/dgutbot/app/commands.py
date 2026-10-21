@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from typing import Any
@@ -18,6 +19,7 @@ from dgutbot.app.campus_startup import configure_campus_login_startup
 from dgutbot.app.homework_input import HomeworkInput
 from dgutbot.domain.yxy_backend import SignBackend
 from dgutbot.domain.independent_login import IndependentLoginError
+from dgutbot.logs import RunLogSink, append_block, append_block_with_header, redact, session_header, stamp
 from dgutbot.app.updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
@@ -32,7 +34,7 @@ ROOT.mkdir(parents=True, exist_ok=True)
 class EventBuffer:
     """线程安全的有限事件流；读取使用游标，不会消费事件。"""
 
-    def __init__(self, maxlen: int = 1500) -> None:
+    def __init__(self, maxlen: int = 4000) -> None:
         self._events: deque[dict[str, Any]] = deque(maxlen=maxlen)
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
@@ -50,6 +52,7 @@ class EventBuffer:
         session_id: str = "",
         page: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
+        module: str = "",
     ) -> dict[str, Any]:
         with self._lock:
             self._seq += 1
@@ -61,6 +64,7 @@ class EventBuffer:
                 "level": str(level),
                 "category": str(category),
                 "message": str(message),
+                "module": str(module),
                 "page": dict(page or {}),
                 "data": dict(data or {}),
             }
@@ -107,12 +111,81 @@ class EventBuffer:
             events = [dict(event) for event in self._events if int(event["seq"]) > after_seq]
             return {"events": events, "latestSeq": self._seq}
 
+    def log_page(
+        self, *, after_seq: int = 0, before_seq: int | None = None,
+        level: str = "", module: str = "", query: str = "", limit: int = 400,
+    ) -> dict[str, Any]:
+        """日志页读取：按级别/模块/关键词过滤，after_seq 用于增量跟随。"""
+        limit = max(1, min(2000, int(limit)))
+        keyword = query.strip().casefold()
+        with self._lock:
+            snapshot = [dict(event) for event in self._events]
+            latest = self._seq
+        matching: list[dict[str, Any]] = []
+        for event in snapshot:
+            seq = int(event["seq"])
+            if after_seq and seq <= after_seq:
+                continue
+            if before_seq is not None and seq >= before_seq:
+                continue
+            if level and event["level"] != level:
+                continue
+            if module and module != "all" and log_module(event) != module:
+                continue
+            if keyword and keyword not in f"{event['message']} {event['code']}".casefold():
+                continue
+            matching.append({
+                "seq": seq, "time": event["time"], "level": event["level"],
+                "module": log_module(event), "category": event["category"],
+                "code": event["code"], "message": event["message"], "data": event["data"],
+            })
+        has_more = len(matching) > limit
+        # 增量跟随取最早的一批，回看历史取最新的一批。
+        window = matching[:limit] if after_seq else matching[-limit:]
+        return {"events": window, "latestSeq": latest, "hasMore": has_more,
+                "bufferSize": len(snapshot)}
+
 
 EVENT_BUFFER = EventBuffer()
 
 
-def emit(message: str, kind: str) -> None:
-    """旧字符串日志兼容入口；课程内部日志默认归入详细日志。"""
+LOG_MODULE_LABELS: dict[str, str] = {
+    "sign": "签到", "course": "刷课", "homework": "作业", "agent": "Agent", "update": "更新", "app": "程序",
+}
+_COURSE_CATEGORIES = {"course", "content", "quiz", "debug"}
+
+
+def log_module(event: dict[str, Any]) -> str:
+    """事件的模块归属。
+
+    优先用发出方写的 ``module``（``emit(text, kind, module)``）；没有才靠
+    code/category 反推，保证旧调用和第三方事件仍能归类。
+    """
+    declared = str(event.get("module") or "")
+    if declared in LOG_MODULE_LABELS:
+        return declared
+    code = str(event.get("code") or "")
+    category = str(event.get("category") or "")
+    if code == "DEBUG_LOG" or category in _COURSE_CATEGORIES:
+        return "course"
+    if code.startswith("HOMEWORK_") or category == "homework":
+        return "homework"
+    if code.startswith("UPDATE_") or category == "update":
+        return "update"
+    if code.startswith("AGENT_") or category == "agent":
+        return "agent"
+    if category == "sign":
+        return "sign"
+    # 未声明归属的通用事件按“程序”处理：签到事件必须由发出方显式声明，
+    # 否则漏标的模块会被静默算成签到，正是这里要避免的误导。
+    return "app"
+
+
+def emit(message: str, kind: str, module: str = "") -> None:
+    """旧字符串日志兼容入口；课程内部日志默认归入详细日志。
+
+    ``module`` 是发出方声明的归属（``sign``/``app``…），留空则按 code/category 反推。
+    """
     is_course = kind.startswith("course:") or message.startswith(("[刷课]", "[yxy]"))
     raw_level = kind.split(":", 1)[-1]
     level = {"muted": "info", "warn": "warning"}.get(raw_level, raw_level)
@@ -122,6 +195,7 @@ def emit(message: str, kind: str) -> None:
         "debug" if is_course else "general",
         message,
         data={"legacyKind": kind},
+        module=module,
     )
 
 
@@ -130,6 +204,9 @@ def emit_event(code: str, level: str, category: str, message: str, **kwargs: Any
 
 
 backend = SignBackend(emit=emit, emit_event=emit_event, root=ROOT)
+# 事件流全部落到 data.md，真实环境出问题可按时间回看整段运行过程。
+RUN_LOG = RunLogSink(lambda: (bool(backend.config.save_log), backend._resolve_log_path()))
+EVENT_BUFFER.subscribe(RUN_LOG.on_event)
 HOMEWORK_INPUT = HomeworkInput(lambda: int(backend.config.debug_port))
 
 
@@ -214,7 +291,92 @@ def courses() -> list[dict[str, Any]]:
     return [{"id": course.id, "name": course.name, "teacherName": course.teacher_name} for course in backend.courses]
 
 
+# 每秒轮询的只读命令不写进 data.md，否则日志会被心跳淹没；它们抛错时仍然记录。
+QUIET_COMMANDS = frozenset({
+    "get_login_status", "load_session_and_courses", "get_sign_monitor_status",
+    "get_course_scan_status", "get_course_helper_status", "get_update_status",
+    "get_events", "get_homework_scan_status", "get_log_events",
+})
+
+
+def _record_command(
+    command: str, payload: dict[str, Any], result: dict[str, Any] | None,
+    error: BaseException | None, elapsed_ms: float,
+) -> None:
+    """把一个命令调用写进事件流：日志页按模块看，data.md 按时间看。
+
+    只记 payload 的键名，绝不记取值；轮询类命令干脆不记。
+    """
+    try:
+        if command in QUIET_COMMANDS and error is None:
+            return
+        outcome = "异常" if error is not None else ("成功" if (result or {}).get("ok") else "失败")
+        detail = redact(error) if error is not None else redact((result or {}).get("error") or "")
+        keys = ",".join(sorted(str(key) for key in payload)) if isinstance(payload, dict) else ""
+        parts = [f"{redact(command)} · {outcome} · {elapsed_ms:.0f}ms"]
+        if keys:
+            parts.append(f"payload: {keys}")
+        if detail:
+            parts.append(detail)
+        level = "error" if error is not None else ("info" if outcome == "成功" else "warning")
+        EVENT_BUFFER.emit_event("COMMAND", level, "command", " · ".join(parts))
+    except Exception:  # 日志失败绝不能影响命令本身
+        pass
+
+
+def _export_log_report(payload: dict[str, Any]) -> dict[str, Any]:
+    """把当前筛选结果导出成一份 Markdown，路径随命令返回。"""
+    module = str(payload.get("module") or "all")
+    level = str(payload.get("level") or "")
+    query = str(payload.get("query") or "")
+    page = EVENT_BUFFER.log_page(module=module, level=level, query=query, limit=2000)
+    events = page["events"]
+    now = datetime.now()
+    label = LOG_MODULE_LABELS.get(module, "全部") if module != "all" else "全部模块"
+    # 单独放一层目录，避免把根数据目录刷满导出文件。
+    path = backend.root / "日志导出" / f"日志-{now:%Y%m%d-%H%M%S}.md"
+    lines = [f"\n## 日志导出 · {now:%Y-%m-%d %H:%M:%S}\n",
+             f"- 范围 {label}"
+             + (f" · 级别 {level}" if level else "")
+             + (f" · 关键词 {query}" if query else "")
+             + f" · {len(events)} 条"
+             + ("（缓冲区已满，仅最近若干条）" if page["hasMore"] else "")
+             + "\n\n"]
+    lines.extend(RunLogSink.line(event) for event in events)
+    lines.append("\n")
+    try:
+        append_block(path, lines)
+    except OSError as error:
+        return {"ok": False, "error": f"写入导出文件失败：{error}"}
+    return {"path": str(path), "count": len(events), "module": module, "level": level, "query": query}
+
+
 def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        result = _dispatch(command, payload)
+    except Exception as error:
+        _record_command(command, payload, None, error, (time.perf_counter() - started) * 1000)
+        raise
+    _record_command(command, payload, result, None, (time.perf_counter() - started) * 1000)
+    return result
+
+
+def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if command == "get_log_events":
+        page = EVENT_BUFFER.log_page(
+            after_seq=int(payload.get("afterSeq") or 0),
+            before_seq=(int(payload["beforeSeq"]) if payload.get("beforeSeq") not in (None, "") else None),
+            level=str(payload.get("level") or ""),
+            module=str(payload.get("module") or "all"),
+            query=str(payload.get("query") or ""),
+            limit=int(payload.get("limit") or 400),
+        )
+        return {"ok": True, "logEvents": page["events"], "latestSeq": page["latestSeq"],
+                "hasMore": page["hasMore"], "bufferSize": page["bufferSize"],
+                "modules": LOG_MODULE_LABELS}
+    if command == "export_log_report":
+        return {"ok": True, "report": _export_log_report(payload)}
     if command == "get_homework_input_status":
         return {"ok": True, "homework": HOMEWORK_INPUT.status()}
     if command == "send_homework_text":
@@ -345,6 +507,13 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "clear_selected_course":
         backend.clear_selected_course()
         return {"ok": True}
+    if command in {"get_sign_classrooms", "select_sign_classroom"}:
+        try:
+            status = (backend.sign_monitor.prepare_classrooms() if command == "get_sign_classrooms"
+                      else backend.sign_monitor.select_classroom(payload.get("classroomId")))
+            return {"ok": True, "signStatus": status}
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": backend._redact(error)}
     if command == "start_monitor":
         if backend.selected_course is None and not backend.sign_monitor.membership.pending:
             return {"ok": False, "error": "尚未选择课程"}

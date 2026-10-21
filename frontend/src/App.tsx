@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, KeyRound, PenLine, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, KeyRound, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
 import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
@@ -10,17 +10,20 @@ import { UpdateSettings } from "./UpdateSettings";
 import { UpdateDialog, useUpdateDialog } from "./UpdateDialog";
 import { AboutGuide } from "./AboutGuide";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
+import { LogPanel } from "./LogPanel";
 import { IndependentLoginPanel } from "./IndependentLoginPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
+import { filterSignChoices, firstSignChoiceCursor, SelectedSignChoice, SignChoicePicker, stepSignChoiceCursor, type SignChoice } from "./SignChoicePicker";
 import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStatus, type LessonItem } from "./courseScanView";
 import "./courseScan.css";
 import "./homeworkInput.css";
 
-type Page = "terminal" | "learning" | "homework" | "account" | "settings" | "about";
-type Phase = "ready" | "login" | "courses" | "selected" | "monitoring";
+type Page = "terminal" | "learning" | "homework" | "logs" | "account" | "settings" | "about";
+type Phase = "ready" | "login" | "courses" | "classrooms" | "selected" | "monitoring";
 type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
 type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
 type Course = { id: number; name: string; teacherName: string };
+type Classroom = { id: number; title: string; beginTime: string; statusLabel: string; ended?: boolean };
 type BrowserOption = { name: string; path: string };
 type AppConfig = {
   browser_name?: string; browser_path?: string; save_log?: boolean; log_path?: string;
@@ -32,7 +35,7 @@ type AppConfig = {
   course_ai_model_id?: number;
 };
 type AppInfo = { appName: string; version: string; repo: string };
-type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string; activityMonitoring?: boolean; recoveryPending?: boolean; membershipPhase?: string; recoveryCourseName?: string; recoveryError?: string };
+type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string; classroomId?: number | null; classroomName?: string; classrooms?: Classroom[]; classroomSelectionRequired?: boolean; activityMonitoring?: boolean; recoveryPending?: boolean; membershipPhase?: string; recoveryCourseName?: string; recoveryError?: string };
 type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; hasCachedCredentials?: boolean; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
@@ -40,10 +43,21 @@ const moduleIcons: Record<Page, LucideIcon> = {
   terminal: ClipboardCheck,
   learning: BookOpenCheck,
   homework: PenLine,
+  logs: ScrollText,
   account: KeyRound,
   settings: Settings,
   about: CircleQuestionMark,
 };
+
+/** 课堂列表项的唯一构造点：列表、搜索与回执卡片都读这份结果，状态判断只做一次。 */
+function classroomChoices(rooms?: Classroom[]): SignChoice[] {
+  return (rooms || []).map(room => ({
+    id: room.id,
+    title: room.title,
+    detail: `${room.statusLabel} · ${room.beginTime ? new Date(room.beginTime).toLocaleString("zh-CN", { hour12: false }) : "开始时间未知"}`,
+    disabled: room.ended ?? room.statusLabel === "已结束",
+  }));
+}
 
 function App() {
   const [page, setPage] = useState<Page>("terminal");
@@ -67,7 +81,7 @@ function App() {
   const [path, setPath] = useState("");
   const [detectedBrowsers, setDetectedBrowsers] = useState<BrowserOption[]>([]);
   const [detectingBrowsers, setDetectingBrowsers] = useState(false);
-  const [logPath, setLogPath] = useState("./签到记录.md");
+  const [logPath, setLogPath] = useState("./data.md");
   const [campusLoginOnStartup, setCampusLoginOnStartup] = useState(false);
   const [selectionAutoLeave, setSelectionAutoLeave] = useState(false);
   const [accountEnabled, setAccountEnabled] = useState(false);
@@ -119,8 +133,13 @@ function App() {
     }
   };
   const courseChoices = [...new Map<number, Course>(courses.map(course => [course.id, course])).values()];
-  const courseQuery = command.trim().toLocaleLowerCase();
-  const matchingCourses = courseChoices.filter(course => !courseQuery || `${course.name} ${course.teacherName} ${course.id}`.toLocaleLowerCase().includes(courseQuery));
+  const coursePickChoices = courseChoices.map(course => ({ id: course.id, title: course.name, detail: course.teacherName || "未知教师" }));
+  const matchingCourses = filterSignChoices(coursePickChoices, command);
+  const classroomPickChoices = classroomChoices(signStatus.classrooms);
+  const matchingClassrooms = filterSignChoices(classroomPickChoices, command);
+  const selectedClassroom = signStatus.classroomId == null ? null
+    : classroomPickChoices.find(room => room.id === signStatus.classroomId)
+      ?? { id: signStatus.classroomId, title: signStatus.classroomName || "已选择课堂", detail: "课堂详情暂不可用" };
   const filteredLessonGroups = filterLessonGroups(courseScan.groups, lessonQuery);
   const filteredLessons = filteredLessonGroups.flatMap(group => group.items);
   const selectedLesson = filteredLessons[lessonCursor] || courseScan.groups.flatMap(group => group.items).find(item => item.id === courseScan.selectedId);
@@ -130,7 +149,10 @@ function App() {
     const target = learningLogRef.current;
     if (target && learningAutoScrollRef.current) target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
   }, [learningLogs, courseEvents]);
-  useEffect(() => { if (phase === "courses") setCourseCursor(0); }, [command, courses, phase]);
+  useEffect(() => {
+    if (phase === "courses") setCourseCursor(firstSignChoiceCursor(matchingCourses));
+    if (phase === "classrooms") setCourseCursor(firstSignChoiceCursor(matchingClassrooms));
+  }, [command, courses, phase]);
   useEffect(() => { coursePickerRef.current?.querySelector(".course-option.active")?.scrollIntoView({ block: "nearest" }); }, [courseCursor]);
   useEffect(() => { setLessonCursor(0); }, [lessonQuery, courseScan.cachedAt]);
   useEffect(() => {
@@ -203,7 +225,7 @@ function App() {
     const pullEvents = async () => {
       try { const result = await call("get_events", { afterSeq: courseLastSeqRef.current }); if (!disposed) {
         const events = result.events || [];
-        const learning = events.filter(event => event.sessionId.startsWith("course-") || event.category !== "general");
+        const learning = events.filter(event => (event.sessionId.startsWith("course-") || event.category !== "general") && event.category !== "command");
         const general = events.filter(event => event.category === "general");
         if (learning.length) setCourseEvents(items => mergeEvents(items, learning));
         general.forEach(event => setSignEvents(items => addSignEvent(items, {
@@ -226,9 +248,8 @@ function App() {
       const result = await call("get_sign_monitor_status");
       if (!disposed && result.ok && result.signStatus) {
         setSignStatus(result.signStatus);
-        setPhase(current => result.signStatus?.running
-          ? "monitoring"
-          : current === "monitoring" ? "selected" : current);
+        setPhase(current => result.signStatus?.running ? "monitoring" : current === "monitoring"
+          ? result.signStatus?.classroomSelectionRequired ? "classrooms" : "selected" : current);
       }
     };
     void pullSignStatus();
@@ -291,7 +312,7 @@ function App() {
     } catch (error) { return { ok: false, error: `后端连接失败：${String(error)}` }; }
   }
   function loadConfig(config: AppConfig) {
-    setBrowser(config.browser_name || "自动检测"); setPath(config.browser_path || ""); setLogging(config.save_log !== false); setLogPath(config.log_path || "./签到记录.md");
+    setBrowser(config.browser_name || "自动检测"); setPath(config.browser_path || ""); setLogging(config.save_log !== false); setLogPath(config.log_path || "./data.md");
     setCampusLoginOnStartup(config.campus_login_on_startup === true);
     setSelectionAutoLeave(config.selection_auto_leave === true);
     setPlaybackRate(config.course_playback_rate || 8); setAutoDismiss(config.course_auto_dismiss_dialog !== false); setDocumentScroll(config.course_document_scroll_enabled !== false);
@@ -387,8 +408,39 @@ function App() {
     if (busy) return;
     setBusy(true); const result = await call("select_course", { query: String(course.id) }); setBusy(false);
     if (result.ok && result.course) {
-      setSelectedSignCourse(result.course); setCommand(""); setPhase("selected"); append(`已选定：${result.course.name} · ${result.course.teacherName}`);
-    } else append("选择课程失败，请重新选择。");
+      setSelectedSignCourse(result.course); setCommand(""); append(`已选定：${result.course.name} · ${result.course.teacherName}`);
+      await loadSignClassrooms();
+    } else append(result.error || "选择课程失败，请重新选择。", "warning");
+  }
+  async function loadSignClassrooms() {
+    setBusy(true); setPhase("classrooms"); setCommand(""); setCourseCursor(0);
+    const result = await call("get_sign_classrooms");
+    setBusy(false);
+    if (!result.ok || !result.signStatus) {
+      setSignStatus(current => ({ ...current, classroomId: null, classroomName: "", classrooms: [], classroomSelectionRequired: false }));
+      append(result.error || "课堂读取失败，请刷新重试。", "warning");
+      return;
+    }
+    setSignStatus(result.signStatus);
+    const choices = classroomChoices(result.signStatus.classrooms);
+    setCourseCursor(firstSignChoiceCursor(choices));
+    if (result.signStatus.classroomId != null && result.signStatus.classrooms?.length === 1) {
+      setPhase("selected"); append(`已选择课堂：${result.signStatus.classroomName}`);
+    } else if (!choices.length) append("该课程暂无课堂，可稍后刷新。", "warning");
+    else if (choices.every(item => item.disabled)) append("该课程暂无进行中的课堂，开课后点“刷新课堂”。", "warning");
+    else append("请选择需要监测的课堂。");
+  }
+  async function chooseSignClassroom(id: number) {
+    if (busy) return;
+    const target = classroomChoices(signStatus.classrooms).find(item => item.id === id);
+    if (target?.disabled) { append("该课堂已结束，请选择进行中的课堂。", "warning"); return; }
+    setBusy(true);
+    const result = await call("select_sign_classroom", { classroomId: id });
+    setBusy(false);
+    if (result.ok && result.signStatus) {
+      setSignStatus(result.signStatus); setCommand(""); setPhase("selected");
+      append(`已选择课堂：${result.signStatus.classroomName}`);
+    } else append(result.error || "选择课堂失败，请刷新重试。", "warning");
   }
   async function initializeSignIn() {
     setBusy(true);
@@ -493,8 +545,15 @@ function App() {
     if (busy) return;
     const input = command.trim();
     if (phase === "courses") {
-      const course = matchingCourses[courseCursor];
+      const course = courseChoices.find(item => item.id === matchingCourses[courseCursor]?.id);
       if (course) await chooseSignCourse(course); else append("没有匹配的课程，请修改搜索内容。");
+      return;
+    }
+    if (phase === "classrooms") {
+      if (input === "/") {
+        await call("clear_selected_course"); setSelectedSignCourse(null); setCommand(""); setPhase("courses");
+      } else if (matchingClassrooms[courseCursor]) await chooseSignClassroom(matchingClassrooms[courseCursor].id);
+      else append("暂无匹配课堂，请刷新或修改搜索内容。");
       return;
     }
     setCommand(""); setBusy(true);
@@ -517,7 +576,7 @@ function App() {
       }
     } else if (phase === "selected") {
       if (input === "/") { await call("clear_selected_course"); setSelectedSignCourse(null); setPhase("courses"); append("已取消选定。"); }
-      else if (!input) { const result = await call("start_monitor"); if (result.ok) setPhase("monitoring"); }
+      else if (!input) { const result = await call("start_monitor"); if (result.ok) setPhase("monitoring"); else append(result.error || "启动失败", "warning"); }
     } else if (phase === "monitoring") {
       if (input === "/" || input.toLowerCase() === "stop") {
         await call("stop_monitor");
@@ -529,9 +588,10 @@ function App() {
     setBusy(false);
   }
   function handleSignKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (phase === "courses") {
-      if (event.key === "ArrowDown") { event.preventDefault(); setCourseCursor(index => Math.min(index + 1, Math.max(0, matchingCourses.length - 1))); return; }
-      if (event.key === "ArrowUp") { event.preventDefault(); setCourseCursor(index => Math.max(0, index - 1)); return; }
+    if (phase === "courses" || phase === "classrooms") {
+      const items = phase === "courses" ? matchingCourses : matchingClassrooms;
+      if (event.key === "ArrowDown") { event.preventDefault(); setCourseCursor(index => stepSignChoiceCursor(items, index, 1)); return; }
+      if (event.key === "ArrowUp") { event.preventDefault(); setCourseCursor(index => stepSignChoiceCursor(items, index, -1)); return; }
       if (event.key === "Escape") { event.preventDefault(); setCommand(""); return; }
     }
     if (event.key === "Enter") void run();
@@ -541,8 +601,8 @@ function App() {
     if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "homework", "account", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", account: "独立登录", settings: "设置", about: "关于" };
+  const navItems: Page[] = ["terminal", "learning", "homework", "logs", "account", "settings", "about"];
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", logs: "运行日志", account: "独立登录", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -572,7 +632,7 @@ function App() {
         ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
-      {page === "terminal" && <section className={`terminal sign-terminal ${phase === "courses" ? "course-picking" : ""}`}>
+      {page === "terminal" && <section className={`terminal sign-terminal ${phase === "courses" || phase === "classrooms" ? "course-picking" : ""}`}>
         {(signStatus.recoveryPending || signStatus.recoveryError) && <aside className="course-recovery-notice" role="status" aria-live="polite"><strong>{signStatus.recoveryCourseName || "课程"} · {signStatus.membershipPhase === "withdrawn" ? "已临时退课" : "待恢复原班级"}</strong><p>{signStatus.recoveryError || signStatus.lastResult}</p>{signStatus.recoveryPending && <button className="secondary" disabled={busy} onClick={async () => { setBusy(true); const result = await call("recover_course_membership"); setBusy(false); if (result.signStatus) setSignStatus(result.signStatus); if (!result.ok) append(result.error || "恢复失败，记录已保留"); }}>立即加回并停止</button>}</aside>}
         <div className="sign-event-log" ref={signLogRef} aria-label="签到关键事件">
           <div className="sign-day-label">今天</div>
@@ -586,12 +646,25 @@ function App() {
             <div><strong>{signStatus.round ? `持续监测中 · 第 ${signStatus.round} 轮已完成` : "正在进行首次检查"}</strong><small>{signStatus.round ? `${signStatus.lastResult} · ${nextCheckSeconds} 秒后再次检查` : "正在读取课堂和签到活动"}</small></div>
           </article>}
         </div>
-        <div className="command"><b>›</b><input ref={commandRef} aria-label="课程签到命令" autoFocus disabled={busy || phase === "login"} value={command} onChange={event => setCommand(event.target.value)} onKeyDown={handleSignKeyDown} placeholder={busy ? "正在自动读取登录缓存…" : phase === "login" ? "等待浏览器登录，完成后自动继续…" : phase === "courses" ? "搜索课程，↑↓ 选择，Enter 确认…" : phase === "selected" ? "按 Enter 开始监测，输入 / 重新选课…" : phase === "monitoring" ? "正在监测；输入 / 停止…" : "正在准备签到模块…"}/></div>
-        {phase === "courses" && <motion.div className="course-quick-pick" ref={coursePickerRef} initial={reduceMotion ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}><div className="course-picker-head"><strong>选择签到课程</strong><span>{matchingCourses.length} / {courseChoices.length} 门</span></div><div className="course-options" role="listbox" aria-label="课程列表">{matchingCourses.length ? matchingCourses.map((course, index) => <button key={course.id} type="button" role="option" aria-selected={index === courseCursor} className={`course-option ${index === courseCursor ? "active" : ""}`} onMouseEnter={() => setCourseCursor(index)} onClick={() => void chooseSignCourse(course)}><span><strong>{course.name}</strong><small>{course.teacherName || "未知教师"}</small></span><code>ID {course.id}</code></button>) : <div className="course-empty">没有匹配课程，请换个关键词。</div>}</div><div className="course-picker-help">↑↓ 移动　Enter 选择　Esc 清空搜索</div></motion.div>}
+        {selectedClassroom && (phase === "selected" || phase === "monitoring") && <SelectedSignChoice item={selectedClassroom} busy={busy}
+          onChange={phase === "selected" ? () => void loadSignClassrooms() : undefined} />}
+        <div className="command"><b>›</b><input ref={commandRef} aria-label="课程签到命令" autoFocus disabled={busy || phase === "login"} value={command} onChange={event => setCommand(event.target.value)} onKeyDown={handleSignKeyDown} placeholder={busy ? "正在读取登录信息或课堂…" : phase === "login" ? "等待浏览器登录，完成后自动继续…" : phase === "courses" ? "搜索课程，↑↓ 选择，Enter 确认…" : phase === "classrooms" ? "搜索课堂，Enter 确认，输入 / 重新选课…" : phase === "selected" ? "按 Enter 开始监测，输入 / 重新选课…" : phase === "monitoring" ? "正在监测；输入 / 停止…" : "正在准备签到模块…"}/></div>
+        {(phase === "courses" || phase === "classrooms") && <motion.div className="course-quick-pick" ref={coursePickerRef}
+          initial={reduceMotion ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
+          <SignChoicePicker label={phase === "courses" ? "选择签到课程" : "选择签到课堂"}
+            items={phase === "courses" ? matchingCourses : matchingClassrooms}
+            total={phase === "courses" ? courseChoices.length : classroomPickChoices.length}
+            cursor={courseCursor} busy={busy} onCursor={setCourseCursor} onChoose={id => {
+              if (phase === "classrooms") void chooseSignClassroom(id);
+              else { const course = courseChoices.find(item => item.id === id); if (course) void chooseSignCourse(course); }
+            }} />
+          {phase === "classrooms" && <button type="button" className="secondary compact" disabled={busy}
+            onClick={() => void loadSignClassrooms()}>刷新课堂</button>}
+        </motion.div>}
         <div className="sign-overview" aria-label="签到监测状态">
           <div className="sign-overview-main">
             <span className={`sign-radar ${signStatus.running ? "active" : ""}`} aria-hidden="true">◎</span>
-            <div><div className="sign-course-line"><strong>{signCourseName}</strong><span className={`sign-state ${signStatus.running ? "running" : ""}`}><i />{signStatus.running ? "监测中" : phase === "selected" ? "等待启动" : phase === "courses" ? "等待选择" : "未运行"}</span></div><p>{signStatus.running ? signStatus.lastResult : phase === "selected" ? "按 Enter 开始监测" : "选择课程后即可开始监测签到"}</p></div>
+            <div><div className="sign-course-line"><strong>{signCourseName}</strong><span className={`sign-state ${signStatus.running ? "running" : ""}`}><i />{signStatus.running ? "监测中" : phase === "selected" ? "等待启动" : phase === "courses" || phase === "classrooms" ? "等待选择" : "未运行"}</span></div><p>{signStatus.running ? signStatus.lastResult : phase === "selected" ? "按 Enter 开始监测" : phase === "classrooms" ? "请选择课堂；尚未开课时可刷新" : "选择课程和课堂后即可开始监测签到"}</p></div>
           </div>
           <div className="sign-stats">
             <StatusItem label="最近检查" value={formatClock(signStatus.lastCheck)} />
@@ -644,6 +717,7 @@ function App() {
       </section>}
       {page !== "terminal" && page !== "learning" && <div className={`settings-body ${page === "about" ? "about-settings-body" : ""}`}>
       {page === "homework" && <HomeworkInputPanel />}
+      {page === "logs" && <LogPanel call={call} />}
       {page === "account" && <SettingsSection className="utility-settings" title="独立登录" subtitle="单独登录并核对一个账号的身份；凭据只保留在本次后端会话中，与签到账号互不影响。">
         <div className="settings-surface">
         <IndependentLoginPanel />
@@ -659,7 +733,7 @@ function App() {
         <Card title="校园网"><div className="setting-line"><span>开机时打开校园网登录页</span><button type="button" aria-label="开机时打开校园网登录页" onClick={() => setCampusLoginOnStartup(!campusLoginOnStartup)} className={`switch ${campusLoginOnStartup ? "on" : ""}`}><i /></button></div></Card>
         <Card title="账号登录恢复"><div className="setting-line"><span>启用账号密码自动重新登录</span><button type="button" aria-label="启用账号密码自动重新登录" onClick={() => setAccountEnabled(!accountEnabled)} className={`switch ${accountEnabled ? "on" : ""}`}><i /></button></div>{accountEnabled && <div className="account-fields"><input className="field" value={accountName} onChange={event => setAccountName(event.target.value)} placeholder="学号" autoComplete="username" maxLength={64}/><input className="field" type="password" value={accountPassword} onChange={event => setAccountPassword(event.target.value)} placeholder={hasSavedPassword ? "密码已保存；留空则不修改" : "密码"} autoComplete="current-password" maxLength={256}/></div>}</Card>
         <Card title="刷课"><label className="setting-field"><span>视频倍速</span><input className="field rate-field" type="number" min="1" max="16" step="0.5" value={playbackRate} onChange={event => setPlaybackRate(Math.min(16, Math.max(1, Number(event.target.value) || 1)))}/></label><div className="setting-line"><span>自动答题</span><button type="button" aria-label="自动答题" onClick={toggleQuizAutoAnswer} className={`switch ${quizAutoAnswer ? "on" : ""}`}><i /></button></div>{quizAutoAnswer && <div className="quiz-answer-options"><div className="setting-line"><span>选择题</span><button type="button" aria-label="自动回答选择题" onClick={toggleQuizChoice} className={`switch ${quizChoiceEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>判断题</span><button type="button" aria-label="自动回答判断题" onClick={toggleQuizJudgment} className={`switch ${quizJudgmentEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>填空题</span><button type="button" aria-label="自动回答填空题" onClick={toggleQuizBlank} className={`switch ${quizBlankEnabled ? "on" : ""}`}><i /></button></div></div>}</Card>
-        <Card title="日志与数据"><div className="setting-line"><span>保存签到与错误详情</span><button type="button" aria-label="保存签到与错误详情" onClick={() => setLogging(!logging)} className={`switch ${logging ? "on" : ""}`}><i /></button></div><div className="log-path-row"><input className="field" value={logPath} onChange={event => setLogPath(event.target.value)}/><button className="secondary" disabled={busy} onClick={openLog}>打开日志</button></div></Card>
+        <Card title="日志与数据"><div className="setting-line"><span>保存完整运行日志</span><button type="button" aria-label="保存完整运行日志" onClick={() => setLogging(!logging)} className={`switch ${logging ? "on" : ""}`}><i /></button></div><div className="log-path-row"><input className="field" value={logPath} onChange={event => setLogPath(event.target.value)}/><button className="secondary" disabled={busy} onClick={openLog}>打开日志</button></div></Card>
         <UpdateSettings status={updateStatus} version={appInfo?.version || ""} onCheck={() => { updateDialog.show(); void checkUpdate(); }} onOpen={updateDialog.show}/>
         </div>
         <div className="actions settings-save"><button className="primary" disabled={busy} onClick={saveAllSettings}>{busy ? "保存中…" : "保存全部设置"}</button></div>

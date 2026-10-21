@@ -27,6 +27,12 @@ describe("sign observability", () => {
     });
   });
 
+  it("shows classroom choice and empty lists without implying a date restriction", () => {
+    expect(signEventView(event("[示例课程] 本轮完成：暂无课堂，请稍后刷新。"))).toMatchObject({ title: "暂无课堂" });
+    expect(signEventView(event("[示例课程] 本轮完成：请选择需要监测的课堂。"))).toMatchObject({ title: "请选择课堂", tone: "warning" });
+    expect(signEventView(event("已选择课堂：复用的旧课堂"))).toMatchObject({ title: "已选择课堂", detail: "复用的旧课堂" });
+  });
+
   it("shows activity monitoring after a successful sign instead of a stopped sign", () => {
     expect(signEventView(event("[测试课] 签到成功，继续监测选人活动。"))).toMatchObject({
       title: "签到完成 · 监测课堂活动", tone: "info",
@@ -43,5 +49,14 @@ describe("sign observability", () => {
     expect(signEventView(event("[测试课] 已确认恢复原班级。"))).toMatchObject({
       title: "已恢复原班级", tone: "success",
     });
+  });
+
+  it("passes exception text through unchanged for errors and warnings", () => {
+    const error = signEventView({ ...event("Execution context was destroyed."), level: "error" });
+    expect(error).toMatchObject({ title: "Execution context was destroyed.", detail: "", tone: "error" });
+    const warning = signEventView({ ...event("轮询出错：浏览器拒绝执行请求"), level: "warning" });
+    expect(warning).toMatchObject({ title: "轮询出错：浏览器拒绝执行请求", tone: "warning" });
+    const chinese = signEventView({ ...event("课堂列表读取失败，请检查登录状态后重试"), level: "warning" });
+    expect(chinese.title).toBe("课堂列表读取失败，请检查登录状态后重试");
   });
 });
