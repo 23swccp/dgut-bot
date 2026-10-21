@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowDownToLine, Check, LoaderCircle, X } from "lucide-react";
 import { downloadPercent, formatBytes, stateLabel, type UpdateStatus } from "./updateClient";
 import { UpdateNoticeMemory, updateNoticeKey } from "./updatePrompts";
-import { SafeMarkdown } from "./safeMarkdown";
+import { ReleaseMarkdown } from "./ReleaseMarkdown";
 import "./updates.css";
 
 export function useUpdateDialog(status: UpdateStatus | null) {
@@ -60,7 +60,7 @@ export function UpdateDialog({ open, status, onClose, onDownload, onInstall, rep
     onCancel={event => { event.preventDefault(); if (!handoff) onClose(); }}>
     <header className="update-dialog-heading"><span className="update-panel-icon" aria-hidden="true">{ready ? <Check size={24}/> : <ArrowDownToLine size={24}/>}</span><div><h2 id="software-update-title">{title}</h2><div className="update-dialog-versions">{status?.latestVersion ? <><span>v{status.currentVersion}</span><span aria-hidden="true">→</span><strong>v{status.latestVersion}</strong></> : <span>莞工小皮卡</span>}</div></div><button type="button" className="update-dialog-close" aria-label="关闭更新弹窗" disabled={handoff} onClick={onClose}><X size={20}/></button></header>
     <div className="update-dialog-body">
-      {status?.changelog && <section className="update-changelog" aria-label="本次更新改进说明"><SafeMarkdown source={status.changelog} repo={repo}/></section>}
+      {status?.changelog && <section className="update-changelog" aria-label="本次更新改进说明"><ReleaseMarkdown source={status.changelog} repo={repo || "23swccp/dgut-bot"}/></section>}
       {(status?.error || requestError) && <p className="update-panel-error" role="status">{status?.error || requestError}</p>}
       {downloading && <div className="update-download-progress"><div><strong>{status?.state === "verifying" ? "校验更新包" : `下载中 · ${percent}%`}</strong><span>{formatBytes(status?.downloaded || 0)} / {formatBytes(status?.total || 0)}</span></div><progress max={100} value={percent} aria-label="更新下载进度"/></div>}
       {!status?.latestVersion && <p className="update-dialog-status" role="status">{status ? (status.state === "idle" && !status.error ? "当前没有可用的更新" : stateLabel(status.state)) : "正在读取更新状态…"}</p>}
