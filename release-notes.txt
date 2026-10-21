@@ -1,6 +1,8 @@
-## 本次更新
-
-- 修复从桌面启动时未正确使用 Windows 系统代理，导致检查更新超时的问题；检查和下载统一使用系统代理。
-- 更新提示改为居中弹窗，集中展示本次改进、下载进度和安装操作；点击“下载更新”后才下载，支持稍后处理。
-- 更新说明优先同步对应版本的 GitHub Release 正文；获取失败时使用缓存或包内说明，不影响发现新版。
-- 区分网络、发布附件和安装环境错误，保留失败后的检查与下载重试入口。
+- 普通用户请下载 `DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe`
+- 作业页新增全部作业清单，支持查看待处理、全部、已批阅及已归档作业 [#4](https://github.com/23swccp/dgut-bot/pull/4) @DWDROME
+- 支持归档和恢复整门课程或单条作业，归档记录按账号保存在本机 [#4](https://github.com/23swccp/dgut-bot/pull/4) @DWDROME
+- 签到支持选择具体课堂，提供搜索和键盘选择，已结束的课堂置灰显示 [#6](https://github.com/23swccp/dgut-bot/pull/6)
+- 调整课堂查询逻辑，不再按日期排除仍在使用的旧课堂，监测所选课堂的签到活动 [#3](https://github.com/23swccp/dgut-bot/issues/3)
+- 新增“运行日志”页面，集中查看签到、刷课、作业及更新记录，支持暂停跟随、刷新和导出 [#6](https://github.com/23swccp/dgut-bot/pull/6)
+- 优化错误提示，直接展示具体失败原因，方便排查问题
+- 更新弹窗同步 GitHub Release 正文，支持图片、表格、折叠内容，以及 Issue、PR 和用户链接
