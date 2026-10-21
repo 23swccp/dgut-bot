@@ -11,6 +11,15 @@
 .update-changelog h4 { margin: 0 0 12px; font-size: 13px; }
 .update-changelog .md-paragraph, .update-changelog .md-list-item { font-size: 13px; color: #53635d; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 .update-changelog .md-list-item::before { content: "• "; color: #38865f; }
+.update-changelog .md-list-item.md-ordered::before { content: none; }
+.update-changelog .md-marker { color: #38865f; margin-right: 4px; font-variant-numeric: tabular-nums; }
+/* 全局 code 是块级样式，行内代码必须显式改回 inline，否则会在句中换行。 */
+.update-changelog .md-inline-code { display: inline; padding: 1px 5px; border-radius: 4px; background: #eef2ee; color: #3b5447; font: 12px "Cascadia Mono", monospace; }
+.update-changelog .md-quote { margin: 8px 0; padding-left: 10px; border-left: 3px solid #dfe8e1; color: #5e6f66; font-size: 13px; line-height: 1.8; }
+.update-changelog .md-hr { margin: 12px 0; border: 0; border-top: 1px solid #e6ece6; }
+.update-changelog .md-table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 13px; color: #53635d; }
+.update-changelog .md-table th, .update-changelog .md-table td { padding: 6px 8px; border: 1px solid #e6ece6; text-align: left; }
+.update-changelog .md-table th { background: #f2f7f2; color: #3b5447; }
 .update-changelog h5, .update-changelog h6 { margin: 12px 0 6px; }
 .update-changelog .md-code { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f0f4ef; border-radius: 7px; }
 .update-changelog a { color: #287b53; }

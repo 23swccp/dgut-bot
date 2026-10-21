@@ -619,7 +619,7 @@ function App() {
   return <div className="app-shell"><main className="content">
     <button className="settings" aria-label={sidebarOpen ? "收起侧边面板" : "打开侧边面板"} title={sidebarOpen ? "收起侧边面板" : "打开侧边面板"} onClick={() => setSidebarOpen(open => !open)} />
     {saved && <div className="toast">✓ {saved}</div>}
-    <UpdateDialog open={updateDialog.open} status={updateStatus} onClose={updateDialog.hide} onDownload={retryDownload} onInstall={installUpdate}/>
+    <UpdateDialog open={updateDialog.open} status={updateStatus} onClose={updateDialog.hide} onDownload={retryDownload} onInstall={installUpdate} repo={appInfo?.repo || ""}/>
     <section className={`workspace ${sidebarOpen ? "sidebar-open" : ""}`}>
       <AnimatePresence initial={false}>
         {sidebarOpen && <motion.aside
