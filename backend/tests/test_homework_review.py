@@ -116,6 +116,7 @@ def test_rejects_untrusted_review_drafts(draft, message):
 
 
 def _seed_item(backend: SignBackend, *, end_time: str = "", archived: bool = False) -> str:
+    backend.homework_scan.snapshot()  # 将测试快照绑定到当前账号。
     item = {
         "id": "scan-item", "homeworkId": "99", "courseId": "42", "courseName": "课程",
         "teacherName": "老师", "title": "课程论文", "state": 1, "stateLabel": "未互评",

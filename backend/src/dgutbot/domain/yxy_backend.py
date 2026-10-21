@@ -516,6 +516,7 @@ class SignBackend:
             lambda: list(self.courses), self._scan_course_homeworks,
             lambda: bool(self.token and self.courses), self._redact,
             archives=lambda: self.homework_archive.sets(self.user_id),
+            user_id=lambda: self.user_id,
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
@@ -807,9 +808,17 @@ class SignBackend:
 
     def set_homework_archive(self, kind: str, target_id: str, archived: bool) -> dict:
         """归档只写入本机账号级标记，并立即刷新当前扫描快照。"""
-        if self.user_id is None:
+        user_id = self.user_id
+        if user_id is None:
             raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
-        self.homework_archive.set_archived(self.user_id, str(kind), target_id, bool(archived))
+        snapshot = self.homework_scan.snapshot()
+        targets = {
+            group["courseId"] if kind == "course" else item["id"]
+            for group in snapshot["groups"] for item in group["items"]
+        }
+        if kind not in {"course", "item"} or target_id not in targets or self.user_id != user_id:
+            raise ValueError("归档对象已失效，请重新扫描")
+        self.homework_archive.set_archived(user_id, str(kind), target_id, bool(archived))
         return self.homework_scan.refresh_archive()
 
     def _homework_review_payloads(self, item: dict[str, Any]) -> tuple[Any, Any, Any]:

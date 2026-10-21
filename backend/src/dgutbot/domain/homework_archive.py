@@ -67,7 +67,8 @@ class HomeworkArchive:
             raise ValueError("归档对象标识无效")
         with self._lock:
             key = self.user_key(user_id)
-            entry = self._users.setdefault(key, {"courses": [], "items": []})
+            previous = self._users.get(key)
+            entry = dict(previous or {"courses": [], "items": []})
             field = "courses" if kind == "course" else "items"
             values = set(entry.get(field, []))
             if archived:
@@ -75,7 +76,16 @@ class HomeworkArchive:
             else:
                 values.discard(target)
             entry[field] = sorted(values)
-            self._write()
+            self._users[key] = entry
+            try:
+                self._write()
+            except Exception:
+                # 保存失败时还原整个账号条目，归档和恢复操作都保持原状。
+                if previous is None:
+                    self._users.pop(key, None)
+                else:
+                    self._users[key] = previous
+                raise
             return set(entry.get("courses", [])), set(entry.get("items", []))
 
     def _write(self) -> None:

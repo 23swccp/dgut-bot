@@ -150,12 +150,16 @@ class HomeworkScanService:
         *,
         max_workers: int = 3,
         archives: Callable[[], tuple[set[str], set[str]]] | None = None,
+        user_id: Callable[[], object] | None = None,
     ) -> None:
         self._courses = courses
         self._homeworks = homeworks
         self._authenticated = authenticated
         self._redact = redact
         self._archives = archives or (lambda: (set(), set()))
+        self._user_id = user_id or (lambda: "local")
+        self._owner = self._user_id()
+        self._generation = 0
         self._max_workers = max(1, min(4, max_workers))
         self._lock = threading.RLock()
         self._cancel = threading.Event()
@@ -205,6 +209,7 @@ class HomeworkScanService:
     def refresh_archive(self) -> dict[str, Any]:
         """归档变化后在不重新扫描的情况下更新现有快照。"""
         with self._lock:
+            self._sync_owner()
             if self._snapshot["state"] == "scanning" or not self._items:
                 return self.snapshot()
             ordered = sort_homework_items(self._apply_archive(self._items))
@@ -214,10 +219,29 @@ class HomeworkScanService:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            self._sync_owner()
             value = dict(self._snapshot)
             value["groups"] = [dict(group, items=[dict(item) for item in group["items"]]) for group in self._snapshot["groups"]]
             value["failures"] = [dict(item) for item in self._snapshot["failures"]]
             return value
+
+    def _sync_owner(self) -> None:
+        """调用方持锁；换号立即作废结果和在途扫描，不能复用另一账号的缓存。"""
+        owner = self._user_id()
+        if owner == self._owner:
+            return
+        self._owner = owner
+        self._generation += 1
+        self._cancel.set()
+        self._thread = None
+        self._items = []
+        self._cache_monotonic = 0.0
+        self._snapshot = self._empty()
+
+    def _current(self, generation: int) -> bool:
+        with self._lock:
+            self._sync_owner()
+            return generation == self._generation
 
     def item(self, item_id: str) -> dict[str, Any] | None:
         for group in self.snapshot()["groups"]:
@@ -228,35 +252,46 @@ class HomeworkScanService:
 
     def start(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
+            self._sync_owner()
+            if self._owner is None or not self._authenticated():
+                self._generation += 1
+                self._cancel.set()
+                self._thread = None
+                self._items = []
+                self._cache_monotonic = 0.0
+                self._snapshot = self._empty() | {"state": "auth_required", "error": "登录状态不可用，请重新登录"}
+                return self.snapshot()
             if self._thread and self._thread.is_alive():
                 return self.snapshot()
             if not force and self._cache_monotonic and time.monotonic() - self._cache_monotonic < CACHE_SECONDS:
                 self._snapshot["fromCache"] = True
                 return self.snapshot()
-            if not self._authenticated():
-                self._items = []
-                self._snapshot = self._empty() | {"state": "auth_required", "error": "登录状态不可用，请重新登录"}
-                return self.snapshot()
+            self._generation += 1
             self._cancel = threading.Event()
             self._items = []
             self._snapshot = self._empty() | {"state": "scanning", "loggedIn": True}
-            self._thread = threading.Thread(target=self._run, name="homework-scan", daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, args=(self._generation, self._cancel, list(self._courses())),
+                name="homework-scan", daemon=True,
+            )
             self._thread.start()
             return self.snapshot()
 
     def cancel(self) -> dict[str, Any]:
-        self._cancel.set()
         with self._lock:
+            self._sync_owner()
+            self._cancel.set()
             if self._snapshot["state"] == "scanning":
                 self._snapshot["state"] = "cancelled"
         return self.snapshot()
 
-    def _run(self) -> None:
-        courses = list(self._courses())
+    def _run(self, generation: int, cancel: threading.Event, courses: list[Any]) -> None:
         with self._lock:
+            if not self._current(generation):
+                return
             self._snapshot["totalCourses"] = len(courses)
         if not courses:
-            self._finish([], [], "completed")
+            self._finish([], [], "completed", generation=generation)
             return
         items: list[Homework] = []
         failures: list[dict[str, str]] = []
@@ -266,38 +301,43 @@ class HomeworkScanService:
             futures = {pool.submit(self._homeworks, course): course for course in courses}
             for future in as_completed(futures):
                 course = futures[future]
-                if self._cancel.is_set():
+                if cancel.is_set() or not self._current(generation):
                     aborted = True
                     for pending in futures:
                         pending.cancel()
-                    self._finish(items, failures, "cancelled")
+                    self._finish(items, failures, "cancelled", generation=generation)
                     return
                 try:
-                    items.extend(self._apply_archive(homework_items(course, future.result())))
+                    items.extend(homework_items(course, future.result()))
                 except HomeworkAuthRequiredError as error:
                     aborted = True
                     failures.append({"courseId": str(course.id), "courseName": course.name, "reason": self._redact(error)})
-                    self._cancel.set()
+                    cancel.set()
                     for pending in futures:
                         pending.cancel()
-                    self._finish(items, failures, "auth_required", "登录已失效，请重新登录")
+                    self._finish(items, failures, "auth_required", "登录已失效，请重新登录", generation=generation)
                     return
                 except Exception as error:
                     failures.append({"courseId": str(course.id), "courseName": course.name, "reason": self._redact(error)})
                 with self._lock:
+                    if not self._current(generation):
+                        aborted = True
+                        return
                     self._snapshot["scannedCourses"] += 1
-                    self._snapshot.update(self._count(items))
+                    self._snapshot.update(self._count(self._apply_archive(items)))
         finally:
             pool.shutdown(wait=not aborted, cancel_futures=aborted)
-        if self._cancel.is_set():
-            self._finish(items, failures, "cancelled")
+        if cancel.is_set():
+            self._finish(items, failures, "cancelled", generation=generation)
             return
         state = "error" if failures and len(failures) == len(courses) else "completed"
-        self._finish(items, failures, state, "所有课程作业均读取失败" if state == "error" else "")
+        self._finish(items, failures, state, "所有课程作业均读取失败" if state == "error" else "", generation=generation)
 
-    def _finish(self, items: list[Homework], failures: list[dict[str, str]], state: str, error: str = "") -> None:
-        ordered = sort_homework_items(self._apply_archive(items))
+    def _finish(self, items: list[Homework], failures: list[dict[str, str]], state: str, error: str = "", *, generation: int) -> None:
         with self._lock:
+            if not self._current(generation):
+                return
+            ordered = sort_homework_items(self._apply_archive(items))
             self._items = ordered
             self._snapshot.update(
                 state=state, groups=self._groups(ordered), failures=failures, **self._count(ordered),
