@@ -31,10 +31,15 @@ from dgutbot.domain.homework_archive import HomeworkArchive
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
 from dgutbot.domain.independent_login import LOGIN_URL, IndependentLogin, login_headers
+from dgutbot.logs import append_block_with_header, redact, session_header, stamp
 from dgutbot.domain.sign_monitor import (
     LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
 )
 
+
+
+DEFAULT_LOG_NAME = "data.md"
+LEGACY_LOG_NAME = "签到记录.md"
 
 
 @dataclass
@@ -87,7 +92,7 @@ class AppConfig:
 
     @classmethod
     def from_mapping(cls, values: dict, root: Path) -> "AppConfig":
-        defaults = cls(log_path=str(root / "签到记录.md"))
+        defaults = cls(log_path=str(root / "data.md"))
         if not isinstance(values, dict):
             values = {}
         merged = asdict(defaults) | {
@@ -122,6 +127,12 @@ class AppConfig:
             merged["course_quiz_auto_answer"] = False
         for key in ("browser_path", "browser_name", "log_path", "address"):
             merged[key] = str(merged[key] if merged[key] is not None else getattr(defaults, key))
+        # 旧默认名整体升级为 data.md：日志现在记录完整运行过程，不再只是签到详情。
+        # 只改仍等于旧默认名的取值，用户自己指定的路径保持不动。
+        if Path(merged["log_path"].strip()).name == LEGACY_LOG_NAME:
+            merged["log_path"] = str(Path(merged["log_path"]).with_name(DEFAULT_LOG_NAME))
+        elif not merged["log_path"].strip():
+            merged["log_path"] = defaults.log_path
         merged["browser_path"] = normalize_browser_path(merged["browser_path"])
         return cls(**merged)
 
@@ -368,7 +379,9 @@ async function(request) {
                 if message.get("id") != message_id:
                     continue
                 if message.get("error"):
-                    raise RuntimeError("浏览器拒绝执行请求")
+                    # CDP 的 error.message 是浏览器给出的原文，原样抛出，不另做概括。
+                    detail = str((message.get("error") or {}).get("message") or "").strip()
+                    raise RuntimeError(detail or "浏览器拒绝执行请求")
                 return message.get("result") or {}
         except RuntimeError:
             raise
@@ -464,7 +477,7 @@ USER_ID = None
 class SignBackend:
     def __init__(
         self,
-        emit: Callable[[str, str], None],
+        emit: Callable[[str, str, str], None],
         root: Path | None = None,
         emit_event: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
@@ -475,6 +488,7 @@ class SignBackend:
         self.config: AppConfig = self._load_config()
         # 自动答题是一次性运行授权，不能从上一次程序会话继承。
         self.config.course_quiz_auto_answer = False
+        self._migrate_legacy_log()
         credentials = self._load_credentials()
         self.token = credentials.get("token") or TOKEN
         cached_user_id = credentials.get("user_id")
@@ -498,7 +512,7 @@ class SignBackend:
             settings=lambda: self.config,
             token=lambda: str(self.headers.get("Authorization") or self.token or ""),
             user_id=lambda: self.user_id,
-            log=self._log,
+            log=lambda text, kind: self._log(text, kind, "sign"),
             write_log=self._write_sign_log,
             recovery_path=self.root / "course-recovery.json",
         )
@@ -631,6 +645,18 @@ class SignBackend:
         if not path.is_absolute():
             path = self.root / path
         return path.resolve()
+
+    def _migrate_legacy_log(self) -> None:
+        """把旧的签到记录.md 直接改名成 data.md，保留用户已有历史。"""
+        try:
+            path = self._resolve_log_path()
+            if path.name != DEFAULT_LOG_NAME or path.exists():
+                return
+            legacy = path.with_name(LEGACY_LOG_NAME)
+            if legacy.is_file():
+                os.replace(legacy, path)
+        except OSError:
+            pass
 
     def open_log_file(self, value: str = "") -> Path:
         """创建并用系统默认程序打开当前日志文件。"""
@@ -1015,8 +1041,12 @@ class SignBackend:
             "message": "；".join(parts),
         }
 
-    def _log(self, text: str, kind: str = "muted") -> None:
-        self.emit(text, kind)
+    def _log(self, text: str, kind: str = "muted", module: str = "app") -> None:
+        """默认归属“程序”：登录、浏览器、设置、课程列表都走这里。
+
+        只有真正属于签到监测的输出才传 ``module="sign"``。
+        """
+        self.emit(text, kind, module)
 
     @property
     def course_controller(self):
@@ -1631,7 +1661,7 @@ class SignBackend:
 
     def select_course(self, query: str) -> Course | None:
         """只允许选择一门课程；模糊匹配有歧义时要求用户细化输入。"""
-        if self.sign_monitor.membership.pending:
+        if self.sign_monitor.membership.pending or (self.monitor_thread and self.monitor_thread.is_alive()):
             return None
         keyword = query.strip()
         if not keyword or "," in keyword or "，" in keyword:
@@ -1643,12 +1673,12 @@ class SignBackend:
         return self.selected_course
 
     def clear_selected_course(self) -> None:
-        if self.sign_monitor.membership.pending:
+        if self.sign_monitor.membership.pending or (self.monitor_thread and self.monitor_thread.is_alive()):
             return
         self.selected_course = None
 
     def select_course_id(self, course_id: str) -> Course | None:
-        if self.sign_monitor.membership.pending:
+        if self.sign_monitor.membership.pending or (self.monitor_thread and self.monitor_thread.is_alive()):
             return None
         course = next((item for item in self.courses if str(item.id) == course_id), None)
         if course is not None:
@@ -1662,25 +1692,18 @@ class SignBackend:
         if not self.config.save_log:
             return
         path = self._resolve_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        now = datetime.now()
-        with path.open("a", encoding="utf-8") as file:
-            file.write(f"{now:%Y-%m-%d}-{now.hour}:{now:%M} | {self._redact(course)} | {self._redact(kind)} |\n")
-            for item in details:
-                file.write(f"  - {self._redact(item)}\n")
-            file.write("\n")
+        lines = [f"{stamp()} · sign · {redact(course)} · {redact(kind)}\n"]
+        lines.extend(f"  - {redact(item)}\n" for item in details)
+        lines.append("\n")
+        try:
+            append_block_with_header(path, lines, session_header())
+        except OSError:
+            pass
 
     @staticmethod
     def _redact(value: object) -> str:
         """避免服务端错误信息把常见凭据原样写进长期日志。"""
-        text = str(value)
-        patterns = (
-            r"(?i)(authorization|token|password|cookie)(\s*[:=]\s*)([^\s,;}&]+)",
-            r"(?i)(bearer\s+)([A-Za-z0-9._~+\-/]+=*)",
-        )
-        for pattern in patterns:
-            text = re.sub(pattern, lambda match: f"{match.group(1)}{match.group(2) if match.lastindex and match.lastindex >= 3 else ''}[已隐藏]", text)
-        return text
+        return redact(value)
 
     @property
     def stop_event(self) -> threading.Event:

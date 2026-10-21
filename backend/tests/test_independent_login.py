@@ -200,7 +200,8 @@ def test_command_login_and_clear_leave_primary_session_and_files_untouched(tmp_p
         assert TOKEN not in json.dumps(result) and PASSWORD not in json.dumps(result)
         assert backend_commands.handle("clear_independent_login", {})["ok"]
     assert backend.token == "primary-token" and backend.headers["Authorization"] == "primary-token" and backend.user_id == 999
-    assert list(tmp_path.iterdir()) == []
+    # 命令日志会新建 data.md；除它之外不应产生任何文件。
+    assert [path.name for path in tmp_path.iterdir()] == ["data.md"]
 
 
 def test_browser_reader_uses_local_cdp_and_closes_connection():

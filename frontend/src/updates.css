@@ -8,11 +8,30 @@
 .update-version-line { display: flex; align-items: center; gap: 14px; margin: 24px 0 12px; font-size: 19px; color: #929ca4; }
 .update-version-line strong { color: #2c7453; }
 .update-changelog { padding: 16px 18px; border: 1px solid #e8eee9; background: #fafcf9; border-radius: 12px; margin: 18px 0; max-height: 320px; overflow: auto; }
-.update-changelog h4 { margin: 0 0 12px; font-size: 13px; }
-.update-changelog .md-paragraph, .update-changelog .md-list-item { font-size: 13px; color: #53635d; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
-.update-changelog .md-list-item::before { content: "• "; color: #38865f; }
-.update-changelog h5, .update-changelog h6 { margin: 12px 0 6px; }
-.update-changelog .md-code { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f0f4ef; border-radius: 7px; }
+.release-markdown { color: #53635d; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.release-markdown > :first-child { margin-top: 0; }
+.release-markdown > :last-child { margin-bottom: 0; }
+.release-markdown h1, .release-markdown h2, .release-markdown h3, .release-markdown h4, .release-markdown h5, .release-markdown h6 { margin: 18px 0 8px; color: #3b5447; line-height: 1.5; }
+.release-markdown h1 { font-size: 20px; }
+.release-markdown h2 { font-size: 17px; }
+.release-markdown h3, .release-markdown h4, .release-markdown h5, .release-markdown h6 { font-size: 14px; }
+.release-markdown p { margin: 8px 0; }
+.release-markdown ul, .release-markdown ol { padding-left: 24px; margin: 8px 0; }
+.release-markdown li { margin: 4px 0; }
+.release-markdown .contains-task-list { list-style: none; padding-left: 6px; }
+.release-markdown input[type="checkbox"] { margin-right: 6px; }
+/* 覆盖全局 code 的块级样式，保留句中的行内代码。 */
+.release-markdown code { display: inline; padding: 1px 5px; border-radius: 4px; background: #eef2ee; color: #3b5447; font: 12px "Cascadia Mono", monospace; }
+.release-markdown pre { overflow: auto; padding: 12px; background: #f0f4ef; border-radius: 7px; }
+.release-markdown pre code { display: block; padding: 0; background: transparent; line-height: 1.6; white-space: pre; }
+.release-markdown blockquote { margin: 8px 0; padding-left: 10px; border-left: 3px solid #dfe8e1; color: #5e6f66; }
+.release-markdown hr { margin: 12px 0; border: 0; border-top: 1px solid #e6ece6; }
+.release-markdown-table { overflow-x: auto; margin: 10px 0; }
+.release-markdown table { width: 100%; border-collapse: collapse; }
+.release-markdown th, .release-markdown td { padding: 6px 8px; border: 1px solid #e6ece6; text-align: left; }
+.release-markdown th { background: #f2f7f2; color: #3b5447; }
+.release-markdown img { max-width: 100%; height: auto; vertical-align: middle; }
+.release-markdown summary { cursor: pointer; }
 .update-changelog a { color: #287b53; }
 .update-panel-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 20px 0 12px; }
 .update-panel-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin: 0; }
@@ -36,8 +55,6 @@
 .update-dialog-close:hover { background: #f0f4ef; color: #344c3e; }
 .update-dialog-body { min-height: 0; overflow: auto; padding: 0 28px 22px; }
 .update-dialog-body .update-changelog { margin: 0; max-height: none; padding: 18px 20px; background: #f8faf6; border-color: #edf1e9; }
-.update-dialog-body .update-changelog h4, .update-dialog-body .update-changelog h5, .update-dialog-body .update-changelog h6 { margin-top: 0; font-size: 14px; }
-.update-dialog-body .update-changelog .md-list-item { margin: 7px 0; }
 .update-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 18px 28px; border-top: 1px solid #edf0eb; background: #fbfcfa; flex-shrink: 0; }
 .update-dialog-footer button { min-width: 96px; margin: 0; }
 .update-dialog-status { display: flex; align-items: center; gap: 8px; margin: 18px 0 0; color: #6a7b70; font-size: 13px; }
