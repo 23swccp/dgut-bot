@@ -88,7 +88,13 @@ jobs:
           $setup = $release.assets | Where-Object { $_.name -eq "DgutBot-win-Setup.exe" }
           if ($null -eq $setup) { throw "未找到 Velopack Setup.exe，无法添加用户下载提示" }
           gh api --method PATCH "repos/${{ github.repository }}/releases/assets/$($setup.id)" -f "name=DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe"
-          gh release edit "${{ github.ref_name }}" --notes-file release-notes.txt
+          # Release 正文是更新弹窗的唯一来源。已经在 Releases 里写好的内容不再被覆盖，
+          # 只有正文为空时才用仓库里的 release-notes.txt 兜底填充。
+          if ([string]::IsNullOrWhiteSpace($release.body)) {
+            gh release edit "${{ github.ref_name }}" --notes-file release-notes.txt
+          } else {
+            Write-Host "Release 正文已存在，保留原有内容。"
+          }
 
       - name: Publish installer to Gitee mirror
         env:
