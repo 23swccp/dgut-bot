@@ -1,0 +1,119 @@
+.log-page .log-card { padding-bottom: 14px; }
+
+.log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+
+.log-actions .secondary.compact.on {
+  border-color: #bfe6d3;
+  background: #eaf8f0;
+  color: #007f46;
+}
+
+.log-actions .primary.compact {
+  height: 32px;
+  padding: 0 16px;
+  font-weight: 600;
+}
+
+.log-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: #7b8495;
+  font-size: 12px;
+}
+
+.log-summary .log-error { color: #be343c; }
+
+.log-summary .link-button {
+  border: 0;
+  background: transparent;
+  color: #007f46;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.log-report-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #98a2b1;
+  font-size: 11px;
+}
+
+.log-list {
+  height: min(58vh, 520px);
+  overflow: auto;
+  border: 1px solid #e6eaef;
+  border-radius: 10px;
+  background: #fbfcfd;
+  padding: 6px 8px;
+  font-family: "Cascadia Mono", "Microsoft YaHei UI", monospace;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 108px 44px 44px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #333d4a;
+}
+
+.log-row + .log-row { border-top: 1px solid #eef1f4; }
+.log-row:hover { background: #f2f6f9; }
+
+.log-row time { color: #97a1af; font-variant-numeric: tabular-nums; }
+
+.log-level {
+  justify-self: start;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #edf1f5;
+  color: #5b6675;
+}
+
+.log-level.success { background: #e5f6ed; color: #00864a; }
+.log-level.warning { background: #fff1d9; color: #a76000; }
+.log-level.error { background: #fdebec; color: #be343c; }
+
+.log-module { color: #8a94a6; font-size: 11px; }
+
+.log-message { min-width: 0; overflow-wrap: anywhere; }
+
+.log-row.warning .log-message { color: #8a5a12; }
+.log-row.error .log-message { color: #a8323a; }
+
+.log-row code {
+  color: #a3abb8;
+  font-size: 10px;
+  background: transparent;
+}
+
+.log-empty {
+  padding: 40px 12px;
+  color: #8a94a6;
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .log-row { grid-template-columns: 96px 40px minmax(0, 1fr); }
+  .log-row .log-module { display: none; }
+  .log-row code { display: none; }
+}

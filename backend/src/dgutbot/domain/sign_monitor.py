@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -96,7 +95,7 @@ class SignMonitor:
         self._log = log
         self._write_log = write_log
         self.stop_event = threading.Event()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.thread: threading.Thread | None = None
         self.state = MonitorState.IDLE
         self.round = 0
@@ -105,6 +104,10 @@ class SignMonitor:
         self.last_check = ""
         self.last_result = "等待首次检查"
         self._last_sign_succeeded = False
+        self._classroom_scope = self._scope()
+        self._classroom_choices: list[Classroom] = []
+        self._classroom: Classroom | None = None
+        self._classroom_selection_required = False
         self.membership = (CourseMembershipMonitor(
             request=self._membership_request, user_id=user_id, log=log, path=recovery_path,
         ) if recovery_path is not None else None)
@@ -124,21 +127,102 @@ class SignMonitor:
             raise RuntimeError("课程接口连接失败，保留恢复记录；请检查网络和登录状态") from None
 
     def classrooms(self, course_id: int) -> list[Classroom]:
-        response = self._request(
-            "GET",
-            f"{LMS_BASE}/wisdomClassroom/student/getClassroomList",
-            params={
-                "ocId": course_id,
-                "status": "",
-                "pageNum": 1,
-                "pageSize": 10,
-                "order": 0,
-                "lang": "zh",
-            },
-        )
-        data = response.json()
-        raw_classrooms = data.get("result", {}).get("list", []) if data.get("code") == 1 else []
-        return [Classroom.from_api(classroom) for classroom in raw_classrooms]
+        found: dict[int, Classroom] = {}
+        for page in range(1, 101):
+            data = self._request(
+                "GET", f"{LMS_BASE}/wisdomClassroom/student/getClassroomList",
+                params={"ocId": course_id, "status": "", "pageNum": page,
+                        "pageSize": 100, "order": 0, "lang": "zh"},
+            ).json()
+            result = data.get("result") if isinstance(data, dict) and data.get("code") == 1 else None
+            if not isinstance(result, dict) or not isinstance(result.get("list"), list):
+                raise RuntimeError("课堂列表读取失败，请检查登录状态后重试")
+            rows = result["list"]
+            previous_count = len(found)
+            for row in rows:
+                classroom = Classroom.from_api(row)
+                found[classroom.id] = classroom
+            total = result.get("total")
+            if not rows or (isinstance(total, int) and len(found) >= total):
+                return list(found.values())
+            if len(found) == previous_count:
+                raise RuntimeError("课堂列表分页未前进，请稍后重试")
+            if len(rows) < 100 and not isinstance(total, int):
+                return list(found.values())
+        raise RuntimeError("课堂列表过多，未能完整读取，请稍后重试")
+
+    def _scope(self) -> tuple[int | None, int | None]:
+        course = self._selected_course()
+        return self._user_id(), course.id if course else None
+
+    def _sync_classroom_selection(self) -> None:
+        """持锁调用；课堂选择只能在原账号、原课程中使用。"""
+        scope = self._scope()
+        if scope != self._classroom_scope:
+            self._classroom_scope = scope
+            self._classroom_choices = []
+            self._classroom = None
+            self._classroom_selection_required = False
+            if self.thread and self.thread.is_alive():
+                self.stop_event.set()
+
+    @staticmethod
+    def _classroom_ended(classroom: Classroom) -> bool:
+        """只按课堂自身状态判断，不看日期：长期不关的旧课堂仍是进行中。"""
+        return str(getattr(classroom, "raw", {}).get("status")) == "2"
+
+    def _update_classrooms(self, scope: tuple, choices: list[Classroom]) -> bool:
+        with self.lock:
+            self._sync_classroom_selection()
+            if self._classroom_scope != scope:
+                raise RuntimeError("账号或课程已变化，请重新读取课堂")
+            old = self._classroom
+            self._classroom_choices = choices
+            self._classroom = next((item for item in choices if old and item.id == old.id), None)
+            if old is None and len(choices) == 1 and not self._classroom_ended(choices[0]):
+                self._classroom = choices[0]
+            lost = old is not None and self._classroom is None
+            self._classroom_selection_required = lost or bool(choices and self._classroom is None)
+            return lost
+
+    def prepare_classrooms(self) -> dict[str, Any]:
+        with self.lock:
+            self._sync_classroom_selection()
+            if (self.thread and self.thread.is_alive()) or (self.membership and self.membership.pending):
+                raise RuntimeError("请先停止监测并完成课程恢复，再重新选择课堂")
+            scope = self._classroom_scope
+            course = self._selected_course()
+        if course is None:
+            raise ValueError("尚未选择课程")
+        choices = self.classrooms(course.id)
+        self._update_classrooms(scope, choices)
+        return self.status()
+
+    def select_classroom(self, classroom_id: object) -> dict[str, Any]:
+        with self.lock:
+            self._sync_classroom_selection()
+            if (self.thread and self.thread.is_alive()) or (self.membership and self.membership.pending):
+                raise RuntimeError("请先停止监测并完成课程恢复，再重新选择课堂")
+            classroom = next((item for item in self._classroom_choices if str(item.id) == str(classroom_id)), None)
+            if classroom is None:
+                raise ValueError("课堂已失效，请重新读取并选择")
+            if self._classroom_ended(classroom):
+                raise ValueError("该课堂已结束，请选择进行中的课堂")
+            self._classroom = classroom
+            self._classroom_selection_required = False
+            return self.status()
+
+    @classmethod
+    def _classroom_mapping(cls, classroom: Classroom) -> dict[str, Any]:
+        begin = ""
+        raw = getattr(classroom, "raw", {})
+        try:
+            begin = datetime.fromtimestamp(float(raw.get("beginTime")) / 1000).astimezone().isoformat(timespec="minutes")
+        except (OSError, OverflowError, TypeError, ValueError):
+            pass
+        return {"id": classroom.id, "title": classroom.title, "beginTime": begin,
+                "statusLabel": {"0": "进行中", "2": "已结束"}.get(str(raw.get("status")), "状态未知"),
+                "ended": cls._classroom_ended(classroom)}
 
     def activities(self, classroom_id: int) -> list[Activity]:
         response = self._request(
@@ -149,21 +233,6 @@ class SignMonitor:
         data = response.json()
         raw_activities = data.get("result", {}).get("list", []) if data.get("code") == 1 else []
         return [Activity.from_api(activity) for activity in raw_activities]
-
-    @staticmethod
-    def classroom_is_today(classroom: Classroom, now: datetime | None = None) -> bool:
-        """优先使用课堂开始时间；旧接口缺少时间时才兼容标题日期。"""
-        current = now or datetime.now()
-        classroom_raw = getattr(classroom, "raw", {})
-        raw = classroom_raw if isinstance(classroom_raw, dict) else {}
-        begin_time = raw.get("beginTime")
-        try:
-            milliseconds = float(begin_time)
-            if math.isfinite(milliseconds):
-                return datetime.fromtimestamp(milliseconds / 1000).date() == current.date()
-        except (OSError, OverflowError, TypeError, ValueError):
-            pass
-        return current.strftime("%m-%d") in classroom.title
 
     @staticmethod
     def kind(score_type: int | None) -> str:
@@ -277,45 +346,56 @@ class SignMonitor:
         if course is None:
             self._log("尚未选择课程，轮询已跳过。", "warn")
             return "尚未选择课程"
-        now = datetime.now()
-        classrooms = [item for item in self.classrooms(course.id) if self.classroom_is_today(item, now)]
-        if not classrooms:
-            self._log(f"[{course.name}] 本轮完成：今天没有课堂，无需签到。", "muted")
-            return "今日暂无课堂"
+        with self.lock:
+            self._sync_classroom_selection()
+            scope = self._classroom_scope
+        choices = self.classrooms(course.id)
+        lost = self._update_classrooms(scope, choices)
+        with self.lock:
+            classroom = self._classroom
+        if lost or (classroom is None and choices):
+            self.stop_event.set()
+            self._log(f"[{course.name}] 本轮完成：请选择需要监测的课堂。", "warn")
+            return "所选课堂不可用，请重新选择" if lost else "请选择课堂后开始监测"
+        if classroom is None:
+            self._log(f"[{course.name}] 本轮完成：暂无课堂，请稍后刷新。", "muted")
+            return "暂无课堂"
         active_count = 0
         new_count = 0
-        for classroom in classrooms:
-            for activity in self.activities(classroom.id):
-                if (self.membership and getattr(self._settings(), "selection_auto_leave", False)
-                        and str(classroom.raw.get("status")) == "0" and activity.relation_type == 1
-                        and activity.state in (1, 2) and not self.stop_event.is_set()):
-                    if self.membership.arm(course, classroom):
-                        self._log(f"[{course.name}] 已确认签到完成，开始监测选人活动。", "success")
-                        return self.membership.tick()
-                if activity.relation_type != 1 or activity.state not in (0, 1) or activity.status != 0:
-                    continue
-                active_count += 1
-                key = f"{activity.relation_id}_{classroom.id}"
-                if key in checked:
-                    continue
-                new_count += 1
-                self._log(f"[{course.name}] 发现 {self.kind(activity.score_type)}，正在处理…", "info")
-                if self.sign(course, classroom.id, activity):
-                    checked.add(key)
-                if self._last_sign_succeeded:
-                    if (not self.stop_event.is_set() and self.membership
-                            and getattr(self._settings(), "selection_auto_leave", False)):
-                        try:
-                            if self.membership.arm(course, classroom):
-                                self._log(f"[{course.name}] 签到成功，继续监测选人活动。", "success")
-                                return self.membership.tick()
-                        except Exception:
-                            if self.membership.pending:
-                                return "签到已成功，选课变更结果待核对；恢复记录已保留"
-                            self._log("签到已成功，但活动监测初始化失败；未自动退课，请检查登录和班级信息。", "warn")
-                    self.stop()
-                    self._log("已自动停止签到监测。", "success")
-                    return "签到成功，已停止监测"
+        for activity in self.activities(classroom.id):
+            if self._scope() != scope:
+                self.stop_event.set()
+                return "账号或课程已变化，请重新选择课堂"
+            if (self.membership and getattr(self._settings(), "selection_auto_leave", False)
+                    and str(classroom.raw.get("status")) == "0" and activity.relation_type == 1
+                    and activity.state in (1, 2) and not self.stop_event.is_set()):
+                if self.membership.arm(course, classroom):
+                    self._log(f"[{course.name}] 已确认签到完成，开始监测选人活动。", "success")
+                    return self.membership.tick()
+            if activity.relation_type != 1 or activity.state not in (0, 1) or activity.status != 0:
+                continue
+            active_count += 1
+            key = f"{activity.relation_id}_{classroom.id}"
+            if key in checked:
+                continue
+            new_count += 1
+            self._log(f"[{course.name}] 发现 {self.kind(activity.score_type)}，正在处理…", "info")
+            if self.sign(course, classroom.id, activity):
+                checked.add(key)
+            if self._last_sign_succeeded:
+                if (not self.stop_event.is_set() and self.membership
+                        and getattr(self._settings(), "selection_auto_leave", False)):
+                    try:
+                        if self.membership.arm(course, classroom):
+                            self._log(f"[{course.name}] 签到成功，继续监测选人活动。", "success")
+                            return self.membership.tick()
+                    except Exception:
+                        if self.membership.pending:
+                            return "签到已成功，选课变更结果待核对；恢复记录已保留"
+                        self._log("签到已成功，但活动监测初始化失败；未自动退课，请检查登录和班级信息。", "warn")
+                self.stop()
+                self._log("已自动停止签到监测。", "success")
+                return "签到成功，已停止监测"
         if active_count == 0:
             self._log(f"[{course.name}] 本轮完成：未发现进行中的签到。", "muted")
             return "未发现进行中的签到"
@@ -327,6 +407,7 @@ class SignMonitor:
     def status(self) -> dict[str, Any]:
         membership = self.membership.status() if self.membership else {}
         with self.lock:
+            self._sync_classroom_selection()
             running = self.thread is not None and self.thread.is_alive()
             course = self._selected_course()
             return {
@@ -338,11 +419,16 @@ class SignMonitor:
                 "startedAt": self.started_at,
                 "lastCheck": self.last_check,
                 "lastResult": self.last_result,
+                "classroomId": self._classroom.id if self._classroom else None,
+                "classroomName": self._classroom.title if self._classroom else "",
+                "classrooms": [self._classroom_mapping(item) for item in self._classroom_choices],
+                "classroomSelectionRequired": self._classroom_selection_required,
                 **membership,
             }
 
     def start(self) -> bool:
         with self.lock:
+            self._sync_classroom_selection()
             if self.thread is not None and self.thread.is_alive():
                 self._log("签到监测已在运行，无需重复启动。", "muted")
                 return False

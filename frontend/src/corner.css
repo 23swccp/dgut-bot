@@ -1629,9 +1629,64 @@
   box-shadow: 0 0 0 4px #dff3e8;
 }
 
+/* 已结束的课堂只作参考：置灰、不可点、键盘跳过。 */
+.sign-terminal .course-option.is-disabled,
+.sign-terminal .course-option.is-disabled:hover,
+.sign-terminal .course-option.is-disabled.active {
+  border-color: transparent;
+  background: #f1f3f6;
+  color: #9aa2ae;
+  cursor: not-allowed;
+}
+
+.sign-terminal .course-option.is-disabled strong { color: #9aa2ae; font-weight: 500; }
+
+.sign-terminal .course-option.is-disabled small,
+.sign-terminal .course-option.is-disabled code { color: #aab2bd; }
+
+.sign-terminal .course-option.is-disabled::after,
+.sign-terminal .course-option.is-disabled:hover::after,
+.sign-terminal .course-option.is-disabled.active::after {
+  background: #dfe5eb;
+  box-shadow: none;
+}
+
 .sign-terminal .course-picker-help {
   color: #929cab;
   font-size: 11px;
+}
+
+/* 已选定课堂的回执卡片：沿用列表项的排版，并接在同一根流程线上。 */
+.sign-terminal .sign-classroom-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 70px 10px 142px;
+  padding: 2px 6px 2px 34px;
+  background: transparent;
+}
+
+.sign-terminal .sign-classroom-card::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 11px;
+  width: 1px;
+  background: #dfe5eb;
+}
+
+.sign-terminal .sign-classroom-card .course-option {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: default;
+}
+
+.sign-terminal .sign-classroom-card .secondary.compact {
+  flex: none;
 }
 
 @media (max-width: 1050px) {
@@ -1654,4 +1709,5 @@
   .sign-terminal .command::before { left: 69px; }
   .sign-terminal .command::after { left: 70px; width: 24px; }
   .sign-terminal .course-quick-pick { margin-left: 59px; margin-right: 16px; }
+  .sign-terminal .sign-classroom-card { margin-left: 59px; margin-right: 16px; }
 }
