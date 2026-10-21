@@ -96,15 +96,3 @@ jobs:
             Write-Host "Release 正文已存在，保留原有内容。"
           }
 
-      - name: Publish installer to Gitee mirror
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_UPLOAD_TRANSPORT: curl
-          GITEE_UPLOAD_MAX_TIME: "3600"
-          GITEE_OWNER: swccq23
-          GITEE_REPO: dgut-bot
-          GITEE_TAG: ${{ github.ref_name }}
-          GITEE_TARGET_COMMITISH: main
-          GITEE_ASSET: Releases/DgutBot-win-Setup.exe
-          GITEE_ASSET_NAME: DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe
-        run: python scripts/publish.py
