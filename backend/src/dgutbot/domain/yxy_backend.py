@@ -27,6 +27,7 @@ from dgutbot.app.browser_paths import (
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
+from dgutbot.domain.homework_archive import HomeworkArchive
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
 from dgutbot.domain.independent_login import LOGIN_URL, IndependentLogin, login_headers
@@ -510,9 +511,11 @@ class SignBackend:
             lambda: list(self.courses), self._scan_course_directory,
             lambda: bool(self.token and self.courses), self._redact,
         )
+        self.homework_archive = HomeworkArchive(self.root)
         self.homework_scan = HomeworkScanService(
             lambda: list(self.courses), self._scan_course_homeworks,
             lambda: bool(self.token and self.courses), self._redact,
+            archives=lambda: self.homework_archive.sets(self.user_id),
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
@@ -802,6 +805,13 @@ class SignBackend:
     def homework_scan_status(self) -> dict:
         return self.homework_scan.snapshot()
 
+    def set_homework_archive(self, kind: str, target_id: str, archived: bool) -> dict:
+        """归档只写入本机账号级标记，并立即刷新当前扫描快照。"""
+        if self.user_id is None:
+            raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
+        self.homework_archive.set_archived(self.user_id, str(kind), target_id, bool(archived))
+        return self.homework_scan.refresh_archive()
+
     def _homework_review_payloads(self, item: dict[str, Any]) -> tuple[Any, Any, Any]:
         if self.user_id is None:
             raise HomeworkAuthRequiredError("登录信息缺少用户标识，请重新登录")
@@ -895,7 +905,7 @@ class SignBackend:
             raise ValueError("作业扫描尚未完成，请完成扫描后再检查")
         preliminary = [
             item for group in snapshot.get("groups", []) for item in group.get("items", [])
-            if item.get("needsAction") and self._homework_deadline_open(item.get("endTime"))
+            if item.get("needsAction") and not item.get("archived") and self._homework_deadline_open(item.get("endTime"))
         ]
         candidates: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
@@ -950,6 +960,7 @@ class SignBackend:
         candidates = [
             all_items[item_id] for item_id in requested
             if all_items[item_id].get("needsAction")
+            and not all_items[item_id].get("archived")
             and self._homework_deadline_open(all_items[item_id].get("endTime"))
         ]
         submitted_assignments = 0
@@ -1380,6 +1391,7 @@ class SignBackend:
             return False
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         self.resume_course_recovery()
+        self.homework_scan.refresh_archive()
         return True
 
     def browser_candidates(self) -> list[tuple[str, list[str]]]:
@@ -1605,6 +1617,7 @@ class SignBackend:
         self._log("登录信息验证成功，课程列表读取完成。", "success")
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         self.resume_course_recovery()
+        self.homework_scan.refresh_archive()
         return True
 
     def select_course(self, query: str) -> Course | None:
