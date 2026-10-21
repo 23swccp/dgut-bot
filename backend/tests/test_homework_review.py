@@ -115,14 +115,16 @@ def test_rejects_untrusted_review_drafts(draft, message):
         build_peer_review_payloads(DETAIL, PEERS, {"result": []}, [draft], 7)
 
 
-def _seed_item(backend: SignBackend, *, end_time: str = "") -> str:
+def _seed_item(backend: SignBackend, *, end_time: str = "", archived: bool = False) -> str:
+    backend.homework_scan.snapshot()  # 将测试快照绑定到当前账号。
     item = {
         "id": "scan-item", "homeworkId": "99", "courseId": "42", "courseName": "课程",
         "teacherName": "老师", "title": "课程论文", "state": 1, "stateLabel": "未互评",
-        "needsAction": True, "endTime": end_time, "url": "https://lms.dgut.edu.cn/",
+        "needsAction": True, "archived": archived, "endTime": end_time, "url": "https://lms.dgut.edu.cn/",
     }
     backend.homework_scan._snapshot.update(
-        state="completed", groups=[{"courseId": "42", "courseName": "课程", "items": [item]}],
+        state="completed",
+        groups=[{"courseId": "42", "courseName": "课程", "courseArchived": False, "items": [item]}],
     )
     return item["id"]
 
@@ -208,3 +210,16 @@ def test_bulk_candidate_preflight_excludes_homework_before_peer_review_time():
         with patch.object(backend, "_homework_review_payloads", return_value=(DETAIL, peers, {"result": []})):
             result = backend.pending_homework_review_candidates()
         assert result["items"] == [] and result["failures"] == []
+
+
+def test_archived_homework_is_excluded_from_bulk_candidates_and_submission():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SignBackend(lambda *_: None, root=Path(directory))
+        backend.user_id = 7
+        item_id = _seed_item(backend, end_time="2999-09-24T00:00:00+08:00", archived=True)
+        with patch.object(backend, "_homework_review_payloads") as read:
+            candidates = backend.pending_homework_review_candidates()
+            submitted = backend.submit_pending_homework_reviews([item_id])
+        assert candidates == {"items": [], "failures": []}
+        assert submitted["candidateAssignments"] == 0 and submitted["submittedReviews"] == 0
+        read.assert_not_called()

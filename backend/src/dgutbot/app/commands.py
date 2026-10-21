@@ -228,6 +228,13 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "homeworkScan": backend.cancel_homework_scan()}
     if command == "get_homework_scan_status":
         return {"ok": True, "homeworkScan": backend.homework_scan_status()}
+    if command == "set_homework_archive":
+        try:
+            return {"ok": True, "homeworkScan": backend.set_homework_archive(
+                str(payload.get("kind") or ""), str(payload.get("id") or ""), bool(payload.get("archived")),
+            )}
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
     if command == "get_homework_review":
         try:
             return {"ok": True, "homeworkReview": backend.homework_review(str(payload.get("itemId") or ""))}
