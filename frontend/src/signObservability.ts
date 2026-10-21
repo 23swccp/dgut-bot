@@ -41,6 +41,12 @@ export function signEventView(event: SignEvent): SignEventView {
     if (summary.includes("今天没有课堂")) {
       return { ...event, title: "今日暂无课堂", detail: `${result[1]} · 无需签到，监测将继续`, symbol: "–", tone: "muted" };
     }
+    if (summary.includes("暂无课堂")) {
+      return { ...event, title: "暂无课堂", detail: `${result[1]} · 请稍后刷新课堂列表`, symbol: "–", tone: "muted" };
+    }
+    if (summary.includes("请选择需要监测的课堂")) {
+      return { ...event, title: "请选择课堂", detail: result[1], symbol: "!", tone: "warning" };
+    }
     if (summary.includes("未发现进行中的签到")) {
       return { ...event, title: "暂未发现签到", detail: `${result[1]} · 监测将继续`, symbol: "·", tone: "muted" };
     }
@@ -54,6 +60,7 @@ export function signEventView(event: SignEvent): SignEventView {
 
   const selected = message.match(/^已选定：(.+)$/);
   if (selected) return { ...event, title: "已选择课程", detail: selected[1], symbol: "✓", tone: "info" };
+  if (message.startsWith("已选择课堂：")) return { ...event, title: "已选择课堂", detail: message.slice(6), symbol: "✓", tone: "info" };
 
   if (message.includes("已临时退出课程")) return { ...event, title: "选人活动 · 已临时退课", detail: message, symbol: "!", tone: "warning" };
   if (message.includes("已确认恢复原班级")) return { ...event, title: "已恢复原班级", detail: message, symbol: "✓", tone: "success" };

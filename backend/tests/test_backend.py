@@ -43,7 +43,7 @@ class EventBufferTests(unittest.TestCase):
 
 class BackendTests(unittest.TestCase):
     def make_backend(self, root: Path) -> SignBackend:
-        return SignBackend(lambda _text, _kind: None, root=root)
+        return SignBackend(lambda _text, _kind, _module="": None, root=root)
 
     def test_config_accepts_known_values_only(self):
         config = AppConfig.from_mapping({"poll_interval": 8, "unexpected": "ignored"}, Path("."))
@@ -194,6 +194,19 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(protocol.call_args.args[0], "Page.setWebLifecycleState")
         protocol.assert_called_once()
 
+    def test_browser_api_surfaces_the_cdp_rejection_reason(self):
+        client = BrowserApiClient(lambda: 9222, {}, auto_create=False)
+        client._ws = Mock()
+        client._ws.recv.return_value = json.dumps(
+            {"id": 1, "error": {"code": -32000, "message": "Execution context was destroyed."}},
+        )
+        with self.assertRaisesRegex(RuntimeError, "^Execution context was destroyed\\.$"):
+            client._call("Runtime.evaluate", {"expression": "globalThis"})
+        self.assertIsNotNone(client._ws)
+        client._ws.recv.return_value = json.dumps({"id": 2, "error": {"code": -32001}})
+        with self.assertRaisesRegex(RuntimeError, "^浏览器拒绝执行请求$"):
+            client._call("Runtime.evaluate", {"expression": "globalThis"})
+
     def test_browser_api_requires_an_lms_origin_page(self):
         discovery = Mock()
         discovery.raise_for_status.return_value = None
@@ -274,7 +287,7 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backend = self.make_backend(root)
-            log_path = root / "签到记录.md"
+            log_path = root / "data.md"
             backend.update_settings(log_path=str(log_path))
             backend._write_sign_log("测试课程", "一键签到", ["HTTP/status: 200"])
             backend._write_sign_log("测试课程", "数字码签到", ["HTTP/status: 201"])
@@ -286,15 +299,15 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backend = self.make_backend(root)
-            backend.update_settings(log_path="logs/签到记录.md")
+            backend.update_settings(log_path="logs/data.md")
             backend._write_sign_log("测试课程", "一键签到", ["HTTP/status: exception"])
-            self.assertTrue((root / "logs" / "签到记录.md").is_file())
+            self.assertTrue((root / "logs" / "data.md").is_file())
 
     def test_log_redacts_common_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backend = self.make_backend(root)
-            log_path = root / "签到记录.md"
+            log_path = root / "data.md"
             backend.update_settings(log_path=str(log_path))
             backend._write_sign_log("测试课程", "一键签到", ["Authorization: secret-token", "password=hunter2"])
             content = log_path.read_text(encoding="utf-8")
@@ -346,7 +359,7 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(payload["location"], "22.5,113.5")
             self.assertEqual(payload["address"], "测试地点")
             self.assertEqual(payload["attendanceCode"], "")
-            log = (Path(directory) / "签到记录.md").read_text(encoding="utf-8")
+            log = (Path(directory) / "data.md").read_text(encoding="utf-8")
             self.assertIn("位置签到", log)
             self.assertIn("serviceStatus: 400", log)
             self.assertNotIn("result: skipped", log)
@@ -391,7 +404,7 @@ class BackendTests(unittest.TestCase):
             with patch.object(backend.sign_monitor, "direct_sign_request", request):
                 self.assertTrue(backend.sign_monitor.sign(Course(1, "系统工程"), 22, activity))
             self.assertEqual(request.call_args.args[0]["attendanceCode"], "")
-            log = (Path(directory) / "签到记录.md").read_text(encoding="utf-8")
+            log = (Path(directory) / "data.md").read_text(encoding="utf-8")
             self.assertIn("transport: direct-python", log)
             self.assertIn("HTTP: 200", log)
             self.assertIn('rawResponse: {"status":200,"msg":"ok"}', log)
@@ -492,7 +505,7 @@ class BackendTests(unittest.TestCase):
                 self.assertEqual(backend.sign_monitor.poll_once(set()), "已处理 1 个签到活动")
             sign.assert_called_once_with(backend.selected_course, 22, activity)
 
-    def test_poll_does_not_trust_title_when_begin_time_is_from_another_day(self):
+    def test_poll_includes_reused_classroom_started_on_another_day(self):
         with tempfile.TemporaryDirectory() as directory:
             backend = self.make_backend(Path(directory))
             backend.selected_course = Course(1, "系统工程")
@@ -502,10 +515,10 @@ class BackendTests(unittest.TestCase):
                 "beginTime": int(datetime.now().timestamp() * 1000) - 86_400_000,
             })
             with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
-                backend.sign_monitor, "activities",
+                backend.sign_monitor, "activities", return_value=[],
             ) as activities:
-                self.assertEqual(backend.sign_monitor.poll_once(set()), "今日暂无课堂")
-            activities.assert_not_called()
+                self.assertEqual(backend.sign_monitor.poll_once(set()), "未发现进行中的签到")
+            activities.assert_called_once_with(22)
 
     def test_browser_launch_uses_debug_mode_and_opens_requested_url(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -527,7 +540,7 @@ class BackendTests(unittest.TestCase):
     def test_automatic_login_probe_is_quiet_and_non_blocking_while_waiting(self):
         with tempfile.TemporaryDirectory() as directory:
             messages = []
-            backend = SignBackend(lambda text, kind: messages.append((text, kind)), root=Path(directory))
+            backend = SignBackend(lambda text, kind, module="": messages.append((text, kind)), root=Path(directory))
             messages.clear()
             with patch.object(backend, "_get_ws_url", return_value=None), patch("yxy_backend.time.sleep") as sleep:
                 self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
@@ -593,7 +606,7 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             messages = []
-            backend = SignBackend(lambda text, kind: messages.append((text, kind)), root=root)
+            backend = SignBackend(lambda text, kind, module="": messages.append((text, kind)), root=root)
             cookies = [
                 {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "expired-token"},
             ]
@@ -898,6 +911,8 @@ class BackendTests(unittest.TestCase):
             with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom, later_classroom]) as rooms, patch.object(
                 backend.sign_monitor, "activities", return_value=activities,
             ) as fetched, patch.object(backend.sign_monitor, "direct_sign_request", side_effect=submit) as request:
+                backend.sign_monitor.prepare_classrooms()
+                backend.sign_monitor.select_classroom(22)
                 for run in range(2):
                     entered.clear()
                     release.clear()
@@ -920,7 +935,7 @@ class BackendTests(unittest.TestCase):
                     self.assertEqual(status["round"], 1)
                     self.assertEqual(status["lastResult"], "签到成功，已停止监测")
                     self.assertEqual(request.call_count, run + 1)
-                    self.assertEqual(rooms.call_count, run + 1)
+                    self.assertEqual(rooms.call_count, run + 2)
                     self.assertEqual(fetched.call_count, run + 1)
             self.assertTrue(all(call.args[0]["attendanceID"] == 11 for call in request.call_args_list))
 

@@ -268,8 +268,7 @@ def test_sign_success_transitions_to_activity_monitoring(tmp_path, already_signe
                                   "scoreType": 3, "status": 0})
     response = SimpleNamespace(status_code=200, text='{"status":200}', json=lambda: {"status": 200})
     with patch.object(backend.sign_monitor, "classrooms", return_value=[classroom]), patch.object(
-        backend.sign_monitor, "classroom_is_today", return_value=True,
-    ), patch.object(backend.sign_monitor, "activities", return_value=[activity]), patch.object(
+        backend.sign_monitor, "activities", return_value=[activity]), patch.object(
         backend.sign_monitor, "direct_sign_request", return_value=response,
     ) as sign:
         assert "监测选人活动" in backend.sign_monitor.poll_once(set())

@@ -5,6 +5,12 @@ import importlib
 import sys
 import tempfile
 
+# 必须先隔离数据目录，再导入任何 dgutbot 模块：commands 在导入时就会读取
+# config.json 并确定日志路径，晚一步设置就会把测试命令写进真实 data.md。
+_original_data_dir = os.environ.get("YXY_DATA_DIR")
+_test_data = tempfile.TemporaryDirectory(prefix="dgut-offline-tests-")
+os.environ["YXY_DATA_DIR"] = _test_data.name
+
 _MODULE_ALIASES = {
     "agent_cli": "dgutbot.agent.cli", "agent_leases": "dgutbot.agent.leases",
     "agent_protocol": "dgutbot.agent.protocol", "agent_runtime": "dgutbot.agent.runtime",
@@ -18,10 +24,6 @@ _MODULE_ALIASES = {
 }
 for _old_name, _new_name in _MODULE_ALIASES.items():
     sys.modules.setdefault(_old_name, importlib.import_module(_new_name))
-
-_original_data_dir = os.environ.get("YXY_DATA_DIR")
-_test_data = tempfile.TemporaryDirectory(prefix="dgut-offline-tests-")
-os.environ["YXY_DATA_DIR"] = _test_data.name
 
 
 def pytest_unconfigure(config):
