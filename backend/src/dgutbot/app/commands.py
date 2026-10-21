@@ -393,6 +393,15 @@ def handle(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "scan": backend.cancel_course_scan()}
     if command == "get_course_scan_status":
         return {"ok": True, "scan": backend.course_scan_status()}
+    if command == "start_courseware_export":
+        course_id = str(payload.get("courseId") or "")
+        if not course_id:
+            return {"ok": False, "error": "缺少课程标识"}
+        return {"ok": True, "coursewareExport": backend.start_courseware_export(course_id)}
+    if command == "cancel_courseware_export":
+        return {"ok": True, "coursewareExport": backend.cancel_courseware_export()}
+    if command == "get_courseware_export_status":
+        return {"ok": True, "coursewareExport": backend.courseware_export_status()}
     if command == "open_scanned_course":
         item_id = str(payload.get("itemId") or "")
         if not item_id:

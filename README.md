@@ -74,7 +74,16 @@
 
 扫描允许单门课程失败，结果在本次运行中缓存约五分钟，也可以点击“扫描全部课程”强制刷新。
 
+## 课件导出
 
+课件导出把优学院学习页的正文落成可离线阅读的本地资源库，目录固定在 `courseware/<课程名>/`：每章一个 `NN_章节名/` 文件夹，每页写成同名的 `.md` 与 `.html`，附件放在该章的 `_files/` 下，另外生成 `index.md` 目录和记录来源的 `manifest.json`。同名课程用 `.dgutbot-courseware.json` 记录课程 ID，不同课程不会互相覆盖。
+
+导出只处理两类页面：`contentType=5` 的图文正文页和 `contentType=7` 的文档页。**测验块在解析阶段就被跳过**：导出不读取题目、选项或答案，也不会发出任何作答请求。
+
+- 后端命令：`start_courseware_export`（参数 `courseId`，LMS 课程 ID）、`get_courseware_export_status`、`cancel_courseware_export`。
+- 状态字段包含 `state`（`idle`/`running`/`cancelling`/`completed`/`cancelled`/`error`/`auth_required`）、章节与页面进度、附件数量、失败原因和最终目录。
+- 重跑是幂等的：内容相同的文件保持不动，只补写新增或变化的页面；单个章节或单个附件失败只记录原因，不影响其余页面。
+- 优学院课程 ID 与 LMS 课程 ID 不通用，导出前会经教材接口显式换算；平台没有提供标识时直接报错，不用 LMS ID 猜测。
 
 ## 设置与数据
 
@@ -108,6 +117,7 @@
 | `auth.json` | 保存 Token 和用户 ID 缓存 |
 | `browser_profile/` | 保存独立浏览器配置和登录状态 |
 | `independent_account.json` | 仅在“独立登录”勾选“记住账号密码”时保存该账号与密码（明文，本机使用） |
+| `courseware/` | 课件导出的本地资源库：按课程的 Markdown、HTML、附件与清单 |
 | 注册表 `DgutBotCampusLogin` | 可选的当前用户校园网登录页开机启动项 |
 
 程序的本地服务只监听 `127.0.0.1`；发行版端口范围为 `8765–8784`，开发前端为 `1420–1439`。

@@ -27,6 +27,7 @@ from dgutbot.app.browser_paths import (
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
+from dgutbot.domain.courseware_export import UA_BASE, CoursewareExportService
 from dgutbot.domain.homework_archive import HomeworkArchive
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
@@ -389,6 +390,8 @@ async function(request) {
         params = kwargs.pop("params", None)
         payload = kwargs.pop("json", None)
         timeout = kwargs.pop("timeout", 15)
+        extra_headers = kwargs.pop("headers", None) or {}
+        max_chars = kwargs.pop("max_chars", 1_048_576)
         if kwargs:
             raise TypeError(f"不支持的浏览器请求参数：{', '.join(sorted(kwargs))}")
         if params:
@@ -398,6 +401,9 @@ async function(request) {
         authorization = str(self._headers.get("Authorization") or "")
         if authorization:
             headers["Authorization"] = authorization
+        if not isinstance(extra_headers, dict):
+            raise TypeError("浏览器请求的额外请求头必须是字典")
+        headers.update({str(key): str(value) for key, value in extra_headers.items()})
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json;charset=UTF-8"
@@ -408,7 +414,7 @@ async function(request) {
             "headers": headers,
             "body": body,
             "timeoutMs": max(1000, min(60000, int(float(timeout) * 1000))),
-            "maxResponseChars": 1_048_576,
+            "maxResponseChars": max(1024, min(8_388_608, int(max_chars))),
         }
         with self._lock:
             origin = f"{parts.scheme}://{parts.netloc}"
@@ -517,6 +523,16 @@ class SignBackend:
             lambda: bool(self.token and self.courses), self._redact,
             archives=lambda: self.homework_archive.sets(self.user_id),
             user_id=lambda: self.user_id,
+        )
+        # 课件导出把图文页与文档页写进本地资源库；测验块在解析层就被跳过。
+        self.courseware_export = CoursewareExportService(
+            root=self.root / "courseware",
+            directory=self._courseware_directory_payload,
+            chapter=self._fetch_courseware_chapter,
+            download=self._download_courseware_file,
+            authenticated=lambda: bool(self.token),
+            redact=self._redact,
+            log=self._log,
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
@@ -794,6 +810,106 @@ class SignBackend:
 
     def course_scan_status(self) -> dict:
         return self.course_scan.snapshot()
+
+    # ------------------------------------------------------------ 课件导出
+    def _ua_headers(self) -> dict[str, str]:
+        """优学院网关要求 ``ua-authorization``，与 LMS 的 Authorization 同值。"""
+        token = str(self.headers.get("Authorization") or self.token or "")
+        return {"ua-authorization": token, "version": "1"} if token else {"version": "1"}
+
+    def _ua_course_identity(self, course: Course, *, api: BrowserApiClient | None = None) -> tuple[str, str]:
+        """从 LMS 教材接口换取优学院 courseId 与 classId。
+
+        两套 ID 不通用，缺失时直接失败：用 LMS ID 猜测只会拿到空目录。
+        """
+        client = api or self.api
+        textbooks = self._directory_json(
+            client, f"{LMS_BASE}/textbook/student/{course.id}/list", params={"lang": "zh"},
+        )
+        entries = textbooks if isinstance(textbooks, list) else (textbooks or {}).get("result", [])
+        ua_course = next((
+            str(item.get("courseId")) for item in entries
+            if isinstance(item, dict) and item.get("courseId")
+        ), "")
+        class_payload = self._directory_json(
+            client, f"{LMS_BASE}/classes/information/student/{course.id}", params={"lang": "zh"},
+        )
+        class_info = class_payload.get("result", class_payload) if isinstance(class_payload, dict) else {}
+        class_id = str(class_info.get("classId") or "")
+        if not ua_course or not class_id:
+            raise RuntimeError("平台未提供该课程的优学院标识，无法定位学习页")
+        return ua_course, class_id
+
+    def _courseware_directory_payload(self, course: Course) -> Any:
+        """导出任务专用的独立 CDP 会话，避免与签到轮询共享请求桥。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            ua_course, class_id = self._ua_course_identity(course, api=api)
+            try:
+                return api.request(
+                    "GET", f"{UA_BASE}/course/stu/{quote(ua_course, safe='')}/directory",
+                    params={"classId": class_id}, timeout=20,
+                ).json()
+            except Exception as error:
+                if self._is_login_rejected(error):
+                    raise AuthRequiredError("登录已失效，请重新登录") from error
+                raise
+        finally:
+            api.close()
+
+    def _fetch_courseware_chapter(self, node_id: str) -> Any:
+        """按章节 ``nodeid`` 读取整页数据；传章节 id 会得到空列表。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            try:
+                return api.request(
+                    "GET", f"{UA_BASE}/wholepage/chapter/stu/{quote(str(node_id), safe='')}",
+                    headers=self._ua_headers(), timeout=30, max_chars=4_000_000,
+                ).json()
+            except Exception as error:
+                if self._is_login_rejected(error):
+                    raise AuthRequiredError("登录已失效，请重新登录") from error
+                raise
+        finally:
+            api.close()
+
+    def _download_courseware_file(self, url: str, destination: Path) -> int:
+        """附件按需下载；凭据只发往学校域名，失败时不留半截文件。"""
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        host = (urlsplit(url).hostname or "").lower()
+        if host.endswith("dgut.edu.cn"):
+            headers.update(self._ua_headers())
+            authorization = str(self.headers.get("Authorization") or "")
+            if authorization:
+                headers["Authorization"] = authorization
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f"{destination.name}.part")
+        try:
+            with requests.get(url, headers=headers, timeout=120, stream=True) as response:
+                response.raise_for_status()
+                written = 0
+                with temporary.open("wb") as output:
+                    for chunk in response.iter_content(1 << 20):
+                        if chunk:
+                            output.write(chunk)
+                            written += len(chunk)
+            os.replace(temporary, destination)
+            return written
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def start_courseware_export(self, course_id: str) -> dict:
+        course = next((item for item in self.courses if str(item.id) == str(course_id)), None)
+        if course is None:
+            raise ValueError("课程不在当前列表中，请先刷新课程")
+        return self.courseware_export.start(course)
+
+    def courseware_export_status(self) -> dict:
+        return self.courseware_export.snapshot()
+
+    def cancel_courseware_export(self) -> dict:
+        return self.courseware_export.cancel()
 
     def start_homework_scan(self, *, force: bool = False) -> dict:
         if not self.courses and self.token:
