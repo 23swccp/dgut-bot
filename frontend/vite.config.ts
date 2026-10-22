@@ -9,6 +9,13 @@ export default defineConfig(() => {
     clearScreen: false,
     build: {
       rollupOptions: {
+        output: {
+          manualChunks: {
+            react: ["react", "react-dom"], motion: ["motion/react"],
+            markdown: ["react-markdown", "remark-gfm", "remark-github", "remark-breaks"],
+            "markdown-html": ["rehype-raw", "rehype-sanitize"],
+          },
+        },
         input: {
           main: fileURLToPath(new URL("./index.html", import.meta.url)),
           ai: fileURLToPath(new URL("./ai.html", import.meta.url)),
