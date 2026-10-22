@@ -149,6 +149,15 @@ class Lab:
                 if record["case"] == "late_response":
                     record["release"].wait(40)
                 if record["case"] == "response_lost":
+                    # 响应头之前断开会令 Chromium 重发 POST。先发送响应头及不完整正文，
+                    # 再正常关闭连接，让正文读取失败，模拟已保存但未收到完整回执。
+                    partial = b'{"accepted": true'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(partial) + 50))
+                    self.end_headers()
+                    self.wfile.write(partial)
+                    self.wfile.flush()
                     self.close_connection = True
                     return  # 服务端已保存，客户端没收到回执；不能重试提交。
                 self.reply(503 if record["case"] == "server_error" else 200,
