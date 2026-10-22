@@ -27,6 +27,9 @@ from dgutbot.app.browser_paths import (
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
+from dgutbot.domain.courseware_export import UA_BASE, CoursewareExportService
+from dgutbot.domain.courseware_download import download_file
+from dgutbot.domain.courseware_sources import RESOURCE_NODE, export_directory, export_resources
 from dgutbot.domain.homework_archive import HomeworkArchive
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
@@ -402,6 +405,8 @@ async function(request) {
         params = kwargs.pop("params", None)
         payload = kwargs.pop("json", None)
         timeout = kwargs.pop("timeout", 15)
+        extra_headers = kwargs.pop("headers", None) or {}
+        max_chars = kwargs.pop("max_chars", 1_048_576)
         if kwargs:
             raise TypeError(f"不支持的浏览器请求参数：{', '.join(sorted(kwargs))}")
         if params:
@@ -411,6 +416,9 @@ async function(request) {
         authorization = str(self._headers.get("Authorization") or "")
         if authorization:
             headers["Authorization"] = authorization
+        if not isinstance(extra_headers, dict):
+            raise TypeError("浏览器请求的额外请求头必须是字典")
+        headers.update({str(key): str(value) for key, value in extra_headers.items()})
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json;charset=UTF-8"
@@ -421,7 +429,7 @@ async function(request) {
             "headers": headers,
             "body": body,
             "timeoutMs": max(1000, min(60000, int(float(timeout) * 1000))),
-            "maxResponseChars": 1_048_576,
+            "maxResponseChars": max(1024, min(8_388_608, int(max_chars))),
         }
         with self._lock:
             origin = f"{parts.scheme}://{parts.netloc}"
@@ -531,6 +539,16 @@ class SignBackend:
             lambda: bool(self.token and self.courses), self._redact,
             archives=lambda: self.homework_archive.sets(self.user_id),
             user_id=lambda: self.user_id,
+        )
+        # 课件导出汇总资源区与所有教材，写入本地资源库；测验在解析层跳过。
+        self.courseware_export = CoursewareExportService(
+            root=self.root / "courseware",
+            directory=self._courseware_directory_payload,
+            chapter=self._fetch_courseware_chapter,
+            download=self._download_courseware_file,
+            authenticated=lambda: bool(self.token),
+            redact=self._redact,
+            log=lambda text, kind: self._log(text, kind, "courseware"),
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
@@ -674,9 +692,17 @@ class SignBackend:
         return path
 
     def _fetch_courses(self) -> list[Course]:
-        data = self.api.json("GET", f"{LMS_BASE}/courses/students", params={"keyword": "", "publishStatus": 1, "type": 1, "pn": 1, "ps": 50})
-        raw_courses = data.get("courseList") or data.get("result", {}).get("courseList", [])
-        return [Course.from_api(course) for course in raw_courses]
+        courses = []
+        pn = 1
+        while True:
+            data = self.api.json("GET", f"{LMS_BASE}/courses/students", params={
+                "keyword": "", "publishStatus": 1, "type": 1, "pn": pn, "ps": 50,
+            })
+            raw_courses = data.get("courseList") or data.get("result", {}).get("courseList", [])
+            courses.extend(Course.from_api(course) for course in raw_courses)
+            if len(raw_courses) < 50:
+                return courses
+            pn += 1
 
     @staticmethod
     def _directory_tree_present(value: Any) -> bool:
@@ -820,6 +846,64 @@ class SignBackend:
 
     def course_scan_status(self) -> dict:
         return self.course_scan.snapshot()
+
+    # ------------------------------------------------------------ 课件导出
+    def _ua_headers(self) -> dict[str, str]:
+        """优学院网关要求 ``ua-authorization``，与 LMS 的 Authorization 同值。"""
+        token = str(self.headers.get("Authorization") or self.token or "")
+        return {"ua-authorization": token, "version": "1"} if token else {"version": "1"}
+
+    def _courseware_fetch(self, api: BrowserApiClient, url: str, *, ua: bool = False, **kwargs) -> Any:
+        try:
+            return api.request("GET", url, headers=self._ua_headers() if ua else None,
+                               timeout=30, max_chars=4_000_000, **kwargs).json()
+        except Exception as error:
+            if self._is_login_rejected(error):
+                raise AuthRequiredError("登录已失效，请重新登录") from error
+            raise
+
+    def _courseware_directory_payload(self, course: Course) -> Any:
+        """导出任务专用的独立 CDP 会话，避免与签到轮询共享请求桥。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            return export_directory(course, lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs))
+        finally:
+            api.close()
+
+    def _fetch_courseware_chapter(self, node_id: str) -> Any:
+        """读取资源区或章节整页；UA 章节使用 ``nodeid``。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
+        try:
+            if node_id.startswith(RESOURCE_NODE):
+                return export_resources(node_id[len(RESOURCE_NODE):],
+                                        lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs))
+            return self._courseware_fetch(
+                api, f"{UA_BASE}/wholepage/chapter/stu/{quote(str(node_id), safe='')}", ua=True,
+            )
+        finally:
+            api.close()
+
+    def _download_courseware_file(self, url: str, destination: Path) -> int:
+        """附件按需下载；凭据只发往学校域名，失败时不留半截文件。"""
+        return download_file(url, destination, token=str(self.headers.get("Authorization") or self.token or ""))
+
+    def start_courseware_export(self, course_id: str) -> dict:
+        return self.start_courseware_exports([course_id])
+
+    def start_courseware_exports(self, course_ids: list[str]) -> dict:
+        available = {str(item.id): item for item in self.courses}
+        selected = list(dict.fromkeys(str(value) for value in course_ids))
+        if not selected:
+            raise ValueError("请至少选择一门课程")
+        if any(value not in available for value in selected):
+            raise ValueError("课程不在当前列表中，请先刷新课程")
+        return self.courseware_export.start_many([available[value] for value in selected])
+
+    def courseware_export_status(self) -> dict:
+        return self.courseware_export.snapshot()
+
+    def cancel_courseware_export(self) -> dict:
+        return self.courseware_export.cancel()
 
     def start_homework_scan(self, *, force: bool = False) -> dict:
         if not self.courses and self.token:

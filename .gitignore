@@ -8,6 +8,8 @@ course-recovery.json
 course-recovery.json.tmp
 homework-archive.json
 homework-archive.json.tmp
+courseware/
+.agentdocs/acceptance/
 签到记录.md
 browser-launcher.log
 browser-service.log
