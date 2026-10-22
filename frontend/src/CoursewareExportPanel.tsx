@@ -190,7 +190,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
       <span className="cw-head-icon" aria-hidden="true"><FolderDown size={16} /></span>
       <div className="cw-head-text">
         <h2>课件导出</h2>
-        <p>勾选课程后批量保存到本地：图文页转成 Markdown 与 HTML，图片和附件一并下载。测验与作业不会读取。</p>
+        <p>批量保存课件与作业：正文转成 Markdown 与 HTML，图片、附件、本人提交及可见互评一并下载。测验不会读取。</p>
       </div>
       <button className="secondary cw-refresh" disabled={refreshing || locked} onClick={() => void refresh()}>
         <RefreshCw size={14} className={refreshing ? "cw-spin" : ""} />{refreshing ? "读取中…" : "刷新课程"}
@@ -454,13 +454,13 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
             )}
 
             <div className="cw-job-metrics">
-              <span>章节 <b>{item.chapterDone}</b>/{item.chapterTotal}</span>
+              <span>章节/作业 <b>{item.chapterDone}</b>/{item.chapterTotal}</span>
               <span>页面 <b>{item.pageTotal}</b></span>
               <span>新写 <b>{item.pageWritten}</b></span>
               <span>未变 <b>{item.pageUnchanged}</b></span>
               <span>附件 <b>{item.fileWritten}</b></span>
             </div>
-            {empty && <p className="cw-job-empty">资源区与学习页未发现可导出的正文或附件；目录与清单已保存。</p>}
+            {empty && <p className="cw-job-empty">资源区、学习页与作业中未发现可导出的正文或附件；目录与清单已保存。</p>}
             {item.folder && <code className="cw-job-folder">{item.folder}</code>}
             {item.error && <p className="cw-alert" role="alert"><TriangleAlert size={13} aria-hidden="true" />{item.error}</p>}
             {item.failures.length > 0 && <details className="cw-job-failures">
