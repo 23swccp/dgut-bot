@@ -609,7 +609,7 @@ function App() {
     if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "courseware", "homework", "logs", "account", "settings", "about"];
+  const navItems: Page[] = ["terminal", "learning", "homework", "courseware", "logs", "account", "settings", "about"];
   const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", courseware: "课件导出", homework: "作业", logs: "运行日志", account: "独立登录", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";

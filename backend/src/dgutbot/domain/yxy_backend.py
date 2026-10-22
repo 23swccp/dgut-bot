@@ -31,6 +31,7 @@ from dgutbot.domain.courseware_export import UA_BASE, CoursewareExportService
 from dgutbot.domain.courseware_download import download_file
 from dgutbot.domain.courseware_sources import RESOURCE_NODE, export_directory, export_resources
 from dgutbot.domain.homework_archive import HomeworkArchive
+from dgutbot.domain.homework_export import HOMEWORK_NODE, append_homework_directory, export_homework
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
 from dgutbot.domain.independent_login import LOGIN_URL, IndependentLogin, login_headers
@@ -540,7 +541,7 @@ class SignBackend:
             archives=lambda: self.homework_archive.sets(self.user_id),
             user_id=lambda: self.user_id,
         )
-        # 课件导出汇总资源区与所有教材，写入本地资源库；测验在解析层跳过。
+        # 导出汇总资源区、所有教材与作业；测验在解析层跳过。
         self.courseware_export = CoursewareExportService(
             root=self.root / "courseware",
             directory=self._courseware_directory_payload,
@@ -866,14 +867,17 @@ class SignBackend:
         """导出任务专用的独立 CDP 会话，避免与签到轮询共享请求桥。"""
         api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
         try:
-            return export_directory(course, lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs))
+            fetch = lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs)
+            return append_homework_directory(export_directory(course, fetch), course, fetch)
         finally:
             api.close()
 
     def _fetch_courseware_chapter(self, node_id: str) -> Any:
-        """读取资源区或章节整页；UA 章节使用 ``nodeid``。"""
+        """读取资源区、作业或章节整页；UA 章节使用 ``nodeid``。"""
         api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
         try:
+            if node_id.startswith(HOMEWORK_NODE):
+                return export_homework(node_id, self.user_id, lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs))
             if node_id.startswith(RESOURCE_NODE):
                 return export_resources(node_id[len(RESOURCE_NODE):],
                                         lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs))
