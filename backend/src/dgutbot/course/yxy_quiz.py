@@ -676,25 +676,55 @@ class QuizExecutor:
                 target = next((item for item in options if item["label"] == label), None)
                 if target is None:
                     raise AgentError("QUIZ_APPLY_FAILED", "The answer target is unavailable.")
-                if not target.get("selected") and not h._click_in_viewport(target["pos"], state.viewport):
+                # 页面可能在按下与释放之间滚动（例如并发的滚动/重排），导致点击落空。
+                # 未选中时重新读取坐标再点，最多 3 次；选中后不再重复点击。
+                for _attempt in range(3):
+                    if target.get("selected"):
+                        break
+                    if not h._click_in_viewport(target["pos"], state.viewport):
+                        h._sleep(0.2)
+                        state = guard()
+                        continue
+                    h._sleep(0.15)
+                    state = guard()
+                    fresh = next(q for q in state.questions if q.qid == qid)
+                    options = fresh.judgment if fresh.type == "判断题" else fresh.choices
+                    target = next((item for item in options if item["label"] == label), None)
+                    if target is None:
+                        raise AgentError("QUIZ_APPLY_FAILED", "The answer target is unavailable.")
+                if not target.get("selected"):
                     raise AgentError("QUIZ_APPLY_FAILED", "The answer target could not be selected.")
         guard()
         if h._evaluate(SCROLL_SUBMIT_JS) != "ok":
             raise AgentError("QUIZ_SUBMIT_FAILED", "The submit button is unavailable.")
         h._sleep(0.1)
         state = guard()
-        for question in state.questions:
-            if question.qid not in answers:
-                continue
-            value = answers[question.qid]
-            if question.type == "填空题":
-                matches = [str(blank.get("value") or "") for blank in question.blanks] == value
-            else:
-                label = ("正确" if value else "错误") if question.type == "判断题" else value[0]
-                options = question.judgment if question.type == "判断题" else question.choices
-                matches = [item["label"] for item in options if item.get("selected")] == [label]
-            if not matches:
-                raise AgentError("QUIZ_APPLY_FAILED", "The applied answers could not be verified; nothing was submitted.")
+
+        def mismatches(current) -> list[str]:
+            failed: list[str] = []
+            for question in current.questions:
+                if question.qid not in answers:
+                    continue
+                value = answers[question.qid]
+                if question.type == "填空题":
+                    matches = [str(blank.get("value") or "") for blank in question.blanks] == value
+                else:
+                    label = ("正确" if value else "错误") if question.type == "判断题" else value[0]
+                    options = question.judgment if question.type == "判断题" else question.choices
+                    matches = [item["label"] for item in options if item.get("selected")] == [label]
+                if not matches:
+                    failed.append(question.qid)
+            return failed
+
+        # 选中状态由页面脚本异步回写；慢速环境下固定等待不一定足够。
+        # 这里只重新读取状态、不重复点击，给收敛留出有界时间。
+        for _attempt in range(4):
+            if not mismatches(state):
+                break
+            h._sleep(0.2)
+            state = guard()
+        if mismatches(state):
+            raise AgentError("QUIZ_APPLY_FAILED", "The applied answers could not be verified; nothing was submitted.")
         target = next((q.submit for q in state.questions if q.qid in answers and q.submit), None)
         if target is None:
             raise AgentError("QUIZ_SUBMIT_FAILED", "The submit button is unavailable.")
