@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, KeyRound, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, FolderDown, KeyRound, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
 import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
@@ -12,13 +12,14 @@ import { AboutGuide } from "./AboutGuide";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
 import { LogPanel } from "./LogPanel";
 import { IndependentLoginPanel } from "./IndependentLoginPanel";
+import { CoursewareExportPanel } from "./CoursewareExportPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import { filterSignChoices, firstSignChoiceCursor, SelectedSignChoice, SignChoicePicker, stepSignChoiceCursor, type SignChoice } from "./SignChoicePicker";
 import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStatus, type LessonItem } from "./courseScanView";
 import "./courseScan.css";
 import "./homeworkInput.css";
 
-type Page = "terminal" | "learning" | "homework" | "logs" | "account" | "settings" | "about";
+type Page = "terminal" | "learning" | "courseware" | "homework" | "logs" | "account" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "classrooms" | "selected" | "monitoring";
 type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
 type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
@@ -42,6 +43,7 @@ const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
   terminal: ClipboardCheck,
   learning: BookOpenCheck,
+  courseware: FolderDown,
   homework: PenLine,
   logs: ScrollText,
   account: KeyRound,
@@ -462,6 +464,12 @@ function App() {
     const result = await call("start_course_scan", { force });
     if (result.ok && result.scan) setCourseScan(result.scan);
   }
+  async function refreshExportCourses(): Promise<string> {
+    const result = await call("load_session_and_courses", { waitSeconds: 1 });
+    acceptLoginStatus(result.login);
+    if (result.ok && result.courses) { setCourses(result.courses); return ""; }
+    return result.error || "读取课程失败，请先在程序浏览器中完成学校登录。";
+  }
   async function cancelCourseScan() {
     const result = await call("cancel_course_scan");
     if (result.ok && result.scan) setCourseScan(result.scan);
@@ -601,8 +609,8 @@ function App() {
     if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "homework", "logs", "account", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", logs: "运行日志", account: "独立登录", settings: "设置", about: "关于" };
+  const navItems: Page[] = ["terminal", "learning", "homework", "courseware", "logs", "account", "settings", "about"];
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", courseware: "课件导出", homework: "作业", logs: "运行日志", account: "独立登录", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -718,6 +726,7 @@ function App() {
       {page !== "terminal" && page !== "learning" && <div className={`settings-body ${page === "about" ? "about-settings-body" : ""}`}>
       {page === "homework" && <HomeworkInputPanel />}
       {page === "logs" && <LogPanel call={call} />}
+      {page === "courseware" && <CoursewareExportPanel courses={courseChoices} onRefresh={refreshExportCourses} />}
       {page === "account" && <SettingsSection className="utility-settings" title="独立登录" subtitle="单独登录并核对一个账号的身份；凭据只保留在本次后端会话中，与签到账号互不影响。">
         <div className="settings-surface">
         <IndependentLoginPanel />
