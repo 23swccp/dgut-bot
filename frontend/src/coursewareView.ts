@@ -32,7 +32,25 @@ export type ExportResult = {
 };
 export type ExportStatus = ExportResult & {
   results: ExportResult[]; root: string; courseTotal: number; courseDone: number;
+  request?: { courseIds: string[]; options: ExportOptions } | null; folderOpenError?: string;
 };
+
+export function exportSelectionKey(courseIds: (string | number)[], options: ExportOptions): string {
+  const ids = [...new Set(courseIds.map(String))].sort();
+  const sources = [...new Set(options.sources)].sort();
+  const chapters = ids.filter(id => options.chapters[id] !== undefined).map(id => [id,
+    [...new Set(options.chapters[id])].filter(node => sources.includes(
+      node.startsWith("resources:") ? "resources" : node.startsWith("homework:") ? "homework" : "courseware",
+    )).sort(),
+  ]);
+  return JSON.stringify([ids, sources, [...new Set(options.kinds)].sort(), chapters]);
+}
+
+export function selectionAlreadyExported(status: ExportStatus | null, courseIds: number[], options: ExportOptions): boolean {
+  return Boolean(status?.state === "completed" && status.request && status.results.length > 0 && !status.error
+    && status.results.every(item => item.state === "completed" && !item.error && item.failures.length === 0)
+    && exportSelectionKey(status.request.courseIds, status.request.options) === exportSelectionKey(courseIds, options));
+}
 
 function semester(year: number, season: string): Semester {
   const fall = season === "秋";
