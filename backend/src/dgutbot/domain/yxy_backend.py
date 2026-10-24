@@ -35,7 +35,7 @@ from dgutbot.domain.homework_archive import HomeworkArchive
 from dgutbot.domain.homework_export import HOMEWORK_NODE, append_homework_directory, export_homework
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
-from dgutbot.domain.independent_login import LOGIN_URL, IndependentLogin, login_headers
+from dgutbot.domain.school_auth import LOGIN_URL, login_headers
 from dgutbot.logs import append_block_with_header, redact, session_header, stamp
 from dgutbot.domain.sign_monitor import (
     LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
@@ -508,7 +508,6 @@ class SignBackend:
         self.courses: list[Course] = []
         self.selected_course: Course | None = None
         self.browser_start_lock = threading.Lock()
-        self.independent_login = IndependentLogin(root=self.root)
         # 远端课程/签到请求只从这里读取 Authorization；其余网络请求头均由
         # Chromium 根据 LMS 页面上下文生成。User-Agent 仅供登录恢复/AI 兼容层使用。
         self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -1507,7 +1506,7 @@ class SignBackend:
             return False
         self._log("登录缓存已失效，正在尝试可选的账号密码重新登录…", "info")
         try:
-            # 与独立登录共用学校当前有效的登录入口；appapi/user/login/app 已不下发任何 Cookie。
+            # 使用学校当前有效的登录入口；appapi/user/login/app 已不下发任何 Cookie。
             response = requests.post(
                 LOGIN_URL,
                 data={"loginName": account["username"], "password": account["password"]},

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from dgutbot.domain.yxy_backend import Activity, AppConfig, BrowserApiClient, BrowserLoginRedirectError, Classroom, Course, MonitorState, SignBackend
-from dgutbot.domain.independent_login import LOGIN_URL, login_headers
+from dgutbot.domain.school_auth import LOGIN_URL, login_headers
 from dgutbot.app.commands import EventBuffer
 from dgutbot.app.browser_paths import registered_browser_paths
 
