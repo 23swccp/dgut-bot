@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { classifyCourses, courseSemester, currentSemester, filterExportCourses, selectVisible, semesterOptions } from "./coursewareView";
+import { classifyCourses, courseSemester, currentSemester, defaultExportOptions, filterExportCourses, hasExportSelection, selectVisible, semesterOptions } from "./coursewareView";
 
 describe("courseware course selection", () => {
+  it("blocks empty filters and excludes deselected sources from chapter selection", () => {
+    const courses = [{ id: 1, name: "course", teacherName: "teacher" }];
+    const options = defaultExportOptions();
+    expect(hasExportSelection(courses, options)).toBe(true);
+    expect(hasExportSelection([], options)).toBe(false);
+    expect(hasExportSelection(courses, { ...options, kinds: [] })).toBe(false);
+    expect(hasExportSelection(courses, { ...options, sources: [] })).toBe(false);
+    expect(hasExportSelection(courses, { ...options, chapters: { "1": [] } })).toBe(false);
+    expect(hasExportSelection(courses, { ...options, sources: ["courseware"], chapters: { "1": ["resources:1"] } })).toBe(false);
+    expect(hasExportSelection(courses, { ...options, sources: ["courseware"], chapters: { "1": ["c2"] } })).toBe(true);
+  });
   it("handles spring, fall, January and academic-year titles", () => {
     expect(currentSemester(new Date(2026, 9, 21)).id).toBe("2026-fall");
     expect(currentSemester(new Date(2027, 0, 10)).id).toBe("2026-fall");

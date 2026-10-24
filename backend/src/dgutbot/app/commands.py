@@ -320,7 +320,7 @@ def _record_command(
         if detail:
             parts.append(detail)
         level = "error" if error is not None else ("info" if outcome == "成功" else "warning")
-        module = "courseware" if command in {"start_courseware_export", "cancel_courseware_export"} else ""
+        module = "courseware" if command in {"start_courseware_export", "cancel_courseware_export", "get_courseware_export_catalog"} else ""
         EVENT_BUFFER.emit_event("COMMAND", level, "command", " · ".join(parts), module=module)
     except Exception:  # 日志失败绝不能影响命令本身
         pass
@@ -564,17 +564,22 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "scan": backend.cancel_course_scan()}
     if command == "get_course_scan_status":
         return {"ok": True, "scan": backend.course_scan_status()}
+    if command == "get_courseware_export_catalog":
+        try:
+            return {"ok": True, "catalog": backend.courseware_export_catalog(payload.get("courseIds"))}
+        except ValueError as error:
+            return {"ok": False, "error": str(error)}
     if command == "start_courseware_export":
         try:
             if "courseIds" in payload:
                 if not isinstance(payload["courseIds"], list):
                     raise ValueError("courseIds 应为课程标识列表")
-                status = backend.start_courseware_exports(payload["courseIds"])
+                status = backend.start_courseware_exports(payload["courseIds"], options=payload.get("options"))
             else:
                 course_id = str(payload.get("courseId") or "")
                 if not course_id:
                     raise ValueError("缺少课程标识")
-                status = backend.start_courseware_export(course_id)
+                status = backend.start_courseware_export(course_id, options=payload.get("options"))
             return {"ok": True, "coursewareExport": status}
         except ValueError as error:
             return {"ok": False, "error": str(error)}

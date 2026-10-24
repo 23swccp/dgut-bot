@@ -1,4 +1,27 @@
 export type ExportCourse = { id: number; name: string; teacherName: string };
+export const exportSources = [
+  { id: "resources", label: "资源区" }, { id: "courseware", label: "课件区" }, { id: "homework", label: "作业与互评" },
+] as const;
+export const exportKinds = [
+  { id: "text", label: "正文" }, { id: "document", label: "文档 / PPT" }, { id: "image", label: "图片" },
+  { id: "audio", label: "音频" }, { id: "video", label: "视频" }, { id: "subtitle", label: "字幕" }, { id: "other", label: "其他附件" },
+] as const;
+export type ExportOptions = { sources: string[]; kinds: string[]; chapters: Record<string, string[]> };
+export type ExportCatalog = {
+  courseId: string; courseName: string; chapters: { id: string; title: string; source: string }[];
+  failures: { chapter?: string; reason: string }[]; error: string;
+};
+export function defaultExportOptions(): ExportOptions {
+  return { sources: exportSources.map(item => item.id), kinds: exportKinds.map(item => item.id), chapters: {} };
+}
+export function hasExportSelection(courses: ExportCourse[], options: ExportOptions): boolean {
+  return options.sources.length > 0 && options.kinds.length > 0 && courses.some(course => {
+    const nodes = options.chapters[String(course.id)];
+    return nodes === undefined || nodes.some(node => options.sources.includes(
+      node.startsWith("resources:") ? "resources" : node.startsWith("homework:") ? "homework" : "courseware",
+    ));
+  });
+}
 export type Semester = { id: string; label: string; order: number };
 export type SemesterCourse = ExportCourse & { semester: Semester; assumedSemester: boolean };
 export type ExportResult = {

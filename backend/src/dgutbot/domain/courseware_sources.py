@@ -25,10 +25,12 @@ def resource_url(location: str) -> str:
     return f"{RESOURCE_BASE}/{location.lstrip('/')}" if location else ""
 
 
-def export_directory(course: Any, fetch: Callable[..., Any]) -> dict[str, Any]:
+def export_directory(course: Any, fetch: Callable[..., Any], *, include_courseware: bool = True) -> dict[str, Any]:
     """资源区总是独立扫描；没有教材的课程也可以导出。"""
     chapters = [{"nodeid": f"{RESOURCE_NODE}{course.id}", "nodetitle": "课程资源", "orderindex": 0}]
     failures = []
+    if not include_courseware:
+        return {"coursename": course.name, "chapters": chapters, "failures": failures}
     try:
         response = fetch(f"{LMS_BASE}/textbook/student/{course.id}/list", params={"lang": "zh"})
     except AuthRequiredError:

@@ -4,9 +4,10 @@ import {
   RefreshCw, Search, SearchX, Square, TriangleAlert,
 } from "lucide-react";
 import {
-  classifyCourses, currentSemester, exportStateLabel, filterExportCourses, selectVisible, semesterOptions,
+  classifyCourses, currentSemester, defaultExportOptions, exportStateLabel, filterExportCourses, hasExportSelection, selectVisible, semesterOptions,
   type ExportCourse, type ExportStatus, type SemesterCourse,
 } from "./coursewareView";
+import { CoursewareExportFilters } from "./CoursewareExportFilters";
 import "./coursewareExport.css";
 
 const TERM_STORAGE_KEY = "dgut_bot_cw_last_term";
@@ -45,6 +46,8 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
   });
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
+  const [options, setOptions] = useState(defaultExportOptions);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [status, setStatus] = useState<ExportStatus | null>(null);
   const [pending, setPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -65,7 +68,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
   const someVisible = visible.some(course => selected.includes(course.id));
   const visibleSelectedCount = visible.filter(course => selected.includes(course.id)).length;
   const active = status?.state === "running" || status?.state === "cancelling";
-  const locked = active || pending;
+  const locked = active || pending || catalogLoading;
   const failedCourses = status?.results.filter(item => item.state === "error" || item.failures.length > 0).length || 0;
   const emptyCourses = status?.results.filter(
     item => item.state === "completed" && item.pageTotal === 0 && item.fileWritten === 0,
@@ -139,7 +142,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
 
   async function start() {
     setPending(true); setError("");
-    const result = await command("start_courseware_export", { courseIds: chosen.map(course => course.id) });
+    const result = await command("start_courseware_export", { courseIds: chosen.map(course => course.id), options });
     if (result.ok && result.coursewareExport) {
       setStatus(result.coursewareExport);
       window.setTimeout(() => progressRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 100);
@@ -190,7 +193,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
       <span className="cw-head-icon" aria-hidden="true"><FolderDown size={16} /></span>
       <div className="cw-head-text">
         <h2>课件导出</h2>
-        <p>批量保存课件与作业：正文转成 Markdown 与 HTML，图片、附件、本人提交及可见互评一并下载。测验不会读取。</p>
+        <p>按课程、章节和文件类型保存资料。正文生成 Markdown 与 HTML，附件下载到本机；测验不导出。</p>
       </div>
       <button className="secondary cw-refresh" disabled={refreshing || locked} onClick={() => void refresh()}>
         <RefreshCw size={14} className={refreshing ? "cw-spin" : ""} />{refreshing ? "读取中…" : "刷新课程"}
@@ -368,18 +371,18 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
           </div>
         )}
 
-        <div className="cw-rail-actions">
-          <button className="primary" disabled={locked || !chosen.length} onClick={() => void start()}>
-            {pending ? "处理中…" : chosen.length ? `导出所选 ${chosen.length} 门` : "选择课程后导出"}
-          </button>
-          {chosen.length > 0 && (
-            <button className="secondary" disabled={locked} onClick={() => setSelected([])}>清空选择</button>
-          )}
-        </div>
         <p className="cw-rail-path">
           保存至本机 <span className="cw-nobr"><code>courseware</code></span> 目录；每门课包含 <span className="cw-nobr"><code>index.md</code> 与 <code>manifest.json</code></span>。
         </p>
       </aside>
+    </div>
+
+    <CoursewareExportFilters courses={chosen} options={options} onChange={setOptions}
+      locked={active || pending} onLoading={setCatalogLoading} />
+    <div className="cw-export-actions"><span>已选 {chosen.length} 门课程 · 按上方范围与类型导出</span>
+      <button className="primary" disabled={locked || !hasExportSelection(chosen, options)} onClick={() => void start()}>
+        {pending ? "处理中…" : chosen.length ? `导出所选 ${chosen.length} 门` : "选择课程后导出"}
+      </button>
     </div>
 
     {(error || connectionError) && <p className="cw-alert" role="alert">

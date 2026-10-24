@@ -27,7 +27,8 @@ from dgutbot.app.browser_paths import (
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired,
 )
-from dgutbot.domain.courseware_export import UA_BASE, CoursewareExportService
+from dgutbot.domain.courseware_export import UA_BASE, CoursewareExportService, parse_directory
+from dgutbot.domain.courseware_filters import ExportOptions, export_options, source_kind
 from dgutbot.domain.courseware_download import download_file
 from dgutbot.domain.courseware_sources import RESOURCE_NODE, export_directory, export_resources
 from dgutbot.domain.homework_archive import HomeworkArchive
@@ -545,6 +546,7 @@ class SignBackend:
         self.courseware_export = CoursewareExportService(
             root=self.root / "courseware",
             directory=self._courseware_directory_payload,
+            directory_for_options=self._courseware_directory_payload,
             chapter=self._fetch_courseware_chapter,
             download=self._download_courseware_file,
             authenticated=lambda: bool(self.token),
@@ -863,12 +865,14 @@ class SignBackend:
                 raise AuthRequiredError("登录已失效，请重新登录") from error
             raise
 
-    def _courseware_directory_payload(self, course: Course) -> Any:
+    def _courseware_directory_payload(self, course: Course, options: ExportOptions | None = None) -> Any:
         """导出任务专用的独立 CDP 会话，避免与签到轮询共享请求桥。"""
         api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
         try:
             fetch = lambda url, **kwargs: self._courseware_fetch(api, url, **kwargs)
-            return append_homework_directory(export_directory(course, fetch), course, fetch)
+            filters = options or ExportOptions()
+            directory = export_directory(course, fetch, include_courseware="courseware" in filters.sources)
+            return append_homework_directory(directory, course, fetch) if "homework" in filters.sources else directory
         finally:
             api.close()
 
@@ -891,17 +895,45 @@ class SignBackend:
         """附件按需下载；凭据只发往学校域名，失败时不留半截文件。"""
         return download_file(url, destination, token=str(self.headers.get("Authorization") or self.token or ""))
 
-    def start_courseware_export(self, course_id: str) -> dict:
-        return self.start_courseware_exports([course_id])
+    def start_courseware_export(self, course_id: str, *, options: Any = None) -> dict:
+        return self.start_courseware_exports([course_id], options=options)
 
-    def start_courseware_exports(self, course_ids: list[str]) -> dict:
+    def _export_courses(self, course_ids: list[str]) -> list[Course]:
+        if not isinstance(course_ids, list):
+            raise ValueError("courseIds 应为课程标识列表")
         available = {str(item.id): item for item in self.courses}
         selected = list(dict.fromkeys(str(value) for value in course_ids))
         if not selected:
             raise ValueError("请至少选择一门课程")
         if any(value not in available for value in selected):
             raise ValueError("课程不在当前列表中，请先刷新课程")
-        return self.courseware_export.start_many([available[value] for value in selected])
+        return [available[value] for value in selected]
+
+    def start_courseware_exports(self, course_ids: list[str], *, options: Any = None) -> dict:
+        courses = self._export_courses(course_ids)
+        filters = export_options(options)
+        if set(filters.chapters) - {str(course.id) for course in courses}:
+            raise ValueError("目录筛选包含未选择的课程")
+        return self.courseware_export.start_many(courses, options=filters)
+
+    def courseware_export_catalog(self, course_ids: list[str]) -> list[dict[str, Any]]:
+        """只读取目录供勾选，不读取章节正文或下载附件。"""
+        courses = self._export_courses(course_ids)
+        if not self.token:
+            raise ValueError("登录状态不可用，请重新登录")
+        result = []
+        for course in courses:
+            entry = {"courseId": str(course.id), "courseName": course.name, "chapters": [], "failures": [], "error": ""}
+            try:
+                payload = self._courseware_directory_payload(course)
+                _, chapters = parse_directory(payload)
+                entry["chapters"] = [{"id": chapter["nodeid"], "title": chapter["title"],
+                                      "source": source_kind(chapter["nodeid"])} for chapter in chapters]
+                entry["failures"] = [dict(item, reason=self._redact(item["reason"])) for item in payload.get("failures", [])]
+            except Exception as error:
+                entry["error"] = self._redact(error)
+            result.append(entry)
+        return result
 
     def courseware_export_status(self) -> dict:
         return self.courseware_export.snapshot()

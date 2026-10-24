@@ -14,6 +14,30 @@
 .cw-spin{animation:cw-spin 1s linear infinite}
 @keyframes cw-spin{to{transform:rotate(360deg)}}
 
+.cw-filters{display:grid;gap:14px;padding:18px;border:1px solid #e2e7ec;border-radius:12px;background:#fff}
+.cw-filter-heading h3{margin:0 0 4px;color:#273244;font-size:16px}
+.cw-filter-heading p,.cw-catalog-head p{font-size:12px;color:#7d8998;line-height:1.7}
+.cw-filter-row{display:flex;flex-wrap:wrap;gap:12px 20px;border:0;padding:0;margin:0;min-width:0}
+.cw-filter-row legend{float:left;width:120px;font-size:12px;font-weight:600;line-height:20px;color:#586577}
+.cw-filter-row label{display:inline-flex;gap:7px;align-items:center;font-size:12px;cursor:pointer}
+.cw-page .cw-filter-note{font-size:11.5px;line-height:1.7;color:#8995a5}
+.cw-catalog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:12px;border-top:1px solid #edf1f4}
+.cw-catalog-head strong{font-size:13px;color:#344054}
+.cw-catalog-head button{margin:0;font-size:12px;flex:none}
+.cw-catalog-list{display:grid;gap:12px;max-height:420px;overflow-y:auto;scrollbar-width:thin}
+.cw-catalog-course{display:grid;gap:4px}
+.cw-catalog-course header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:#f6f9f8;border-radius:6px;font-size:12px}
+.cw-catalog-course header span{color:#7d8998;white-space:nowrap;font-size:11px}
+.cw-catalog-course header button{border:0;background:transparent;color:#00894c;font-size:11px;cursor:pointer;margin-left:8px;padding:3px}
+.cw-catalog-item{display:flex;gap:9px;align-items:center;padding:8px 10px;font-size:12px;cursor:pointer;border-radius:6px}
+.cw-catalog-item:hover{background:#f1fbf5}
+.cw-catalog-item span{flex:1;overflow-wrap:anywhere}
+.cw-catalog-item small{color:#8995a5;font-size:11px;flex:none}
+.cw-export-actions{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:10px 14px;background:#f6faf8;border:1px solid #dcebe2;border-radius:10px}
+.cw-export-actions span{font-size:12px;color:#628373}
+.cw-export-actions button{margin:0;font-size:13px;padding:9px 20px}
+@media(max-width:760px){.cw-filter-row legend{float:none;width:auto;margin-bottom:9px}.cw-catalog-course header{align-items:flex-start;flex-direction:column}.cw-export-actions{align-items:stretch;flex-direction:column}.cw-catalog-head{flex-wrap:wrap}}
+
 /* 筛选栏 */
 .cw-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
 .cw-terms{display:flex;flex-wrap:wrap;gap:6px}
