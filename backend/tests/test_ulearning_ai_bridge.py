@@ -119,7 +119,7 @@ def test_gui_course_start_requires_ready_ai_when_auto_answer_is_enabled():
         monkeypatch.setattr(backend_commands.backend, "start_course_helper", lambda **_kwargs: setattr(start, "called", True))
         result = backend_commands.handle("start_course_helper", {})
     assert result["ok"] is False
-    assert "登录缓存" in result["error"]
+    assert "当前登录会话" in result["error"]
     assert "AI" in result["error"]
     assert "private" not in repr(result)
     assert start.called is False
@@ -189,7 +189,7 @@ def test_backend_models_command_returns_dynamic_safe_fields():
     ], "selectedModelId": 4}
 
 
-def test_backend_ai_access_prefers_cached_login_without_browser():
+def test_backend_ai_access_prefers_current_session_without_browser():
     from dgutbot.app import commands as backend_commands
 
     expected = object()
@@ -199,7 +199,7 @@ def test_backend_ai_access_prefers_cached_login_without_browser():
         monkeypatch.setattr(backend_commands.backend, "selected_course", None)
         monkeypatch.setattr(
             backend_commands,
-            "discover_cached_access",
+            "discover_session_access",
             lambda token, courses, **_kwargs: expected if token == "memory-only" and courses == [7] else None,
         )
         monkeypatch.setattr(
@@ -210,7 +210,7 @@ def test_backend_ai_access_prefers_cached_login_without_browser():
         assert backend_commands._resolve_ai_access(9222) is expected
 
 
-def test_backend_ai_access_falls_back_to_browser_when_cache_is_unusable():
+def test_backend_ai_access_falls_back_to_browser_when_session_is_unusable():
     from dgutbot.app import commands as backend_commands
 
     expected = object()
@@ -220,9 +220,9 @@ def test_backend_ai_access_falls_back_to_browser_when_cache_is_unusable():
         monkeypatch.setattr(backend_commands.backend, "selected_course", None)
         monkeypatch.setattr(
             backend_commands,
-            "discover_cached_access",
+            "discover_session_access",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(UlearningAiError("stale")),
         )
-        monkeypatch.setattr(backend_commands.backend, "load_saved_courses", lambda: False)
+        monkeypatch.setattr(backend_commands.backend, "refresh_courses", lambda: False)
         monkeypatch.setattr(backend_commands, "discover_browser_access", lambda port: expected if port == 9333 else None)
         assert backend_commands._resolve_ai_access(9333) is expected

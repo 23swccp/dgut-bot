@@ -1,8 +1,9 @@
 - 普通用户请下载 `DgutBot-win-Setup-Qing-Zhi-Xia-Zai-Zhe-Ge.exe`
-- 作业页新增全部作业清单，支持查看待处理、全部、已批阅及已归档作业 [#4](https://github.com/23swccp/dgut-bot/pull/4) @DWDROME
-- 支持归档和恢复整门课程或单条作业，归档记录按账号保存在本机 [#4](https://github.com/23swccp/dgut-bot/pull/4) @DWDROME
-- 签到支持选择具体课堂，提供搜索和键盘选择，已结束的课堂置灰显示 [#6](https://github.com/23swccp/dgut-bot/pull/6)
-- 调整课堂查询逻辑，不再按日期排除仍在使用的旧课堂，监测所选课堂的签到活动 [#3](https://github.com/23swccp/dgut-bot/issues/3)
-- 新增“运行日志”页面，集中查看签到、刷课、作业及更新记录，支持暂停跟随、刷新和导出 [#6](https://github.com/23swccp/dgut-bot/pull/6)
-- 优化错误提示，直接展示具体失败原因，方便排查问题
-- 更新弹窗同步 GitHub Release 正文，支持图片、表格、折叠内容，以及 Issue、PR 和用户链接
+- 新增课件导出，支持批量保存资源区、课件区及作业的正文、图片、文档、音视频与字幕 [#7](https://github.com/23swccp/dgut-bot/pull/7)
+- 支持按课程、来源、章节或作业、正文与附件类型筛选导出内容 [#7](https://github.com/23swccp/dgut-bot/pull/7)
+- 导出完成后自动打开保存文件夹，已完成的相同选择显示“已导出”，避免重复点击 [#7](https://github.com/23swccp/dgut-bot/pull/7)
+- 修复不同资源被错误合并、源文件变化后仍复用旧附件的问题 [#7](https://github.com/23swccp/dgut-bot/pull/7)
+- 移除“独立登录”模块及专用接口 [#10](https://github.com/23swccp/dgut-bot/pull/10)
+- 课程签到页改为停用公告，说明 2026 年 10 月 23 日服务端校验变化后当前签到功能不可用
+- 打开浏览器界面时默认展开模块侧边栏
+- 登录信息仅在本次运行中保留，启动时从浏览器重新验证当前登录状态

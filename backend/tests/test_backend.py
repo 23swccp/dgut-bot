@@ -549,7 +549,11 @@ class BackendTests(unittest.TestCase):
 
     def test_automatic_login_probe_loads_courses_after_cookie_appears(self):
         with tempfile.TemporaryDirectory() as directory:
-            backend = self.make_backend(Path(directory))
+            root = Path(directory)
+            auth_path = root / "auth.json"
+            auth_path.write_text(json.dumps({"token": "old-token", "user_id": 999}), encoding="utf-8")
+            original = auth_path.read_bytes()
+            backend = self.make_backend(root)
             cookies = [
                 {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "test-token"},
                 {"domain": ".dgut.edu.cn", "name": "userid", "value": "123"},
@@ -563,6 +567,23 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(backend.token, "test-token")
             self.assertEqual(backend.user_id, 123)
             self.assertEqual([course.id for course in backend.courses], [101])
+            self.assertEqual(auth_path.read_bytes(), original)
+
+    def test_refresh_courses_command_uses_current_session_and_cache_command_is_removed(self):
+        from dgutbot.app import commands
+
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            with patch.object(commands, "backend", backend), patch.object(backend, "_fetch_courses", return_value=[Course(101, "课程")]) as fetch:
+                self.assertEqual(commands.handle("load_saved_courses", {}), {"ok": False, "error": "未知命令：load_saved_courses"})
+                self.assertFalse(commands.handle("refresh_courses", {})["ok"])
+                fetch.assert_not_called()
+                backend._apply_token("session-token", 123)
+                result = commands.handle("refresh_courses", {})
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["login"]["userId"], 123)
+                self.assertNotIn("hasCachedCredentials", result)
+                self.assertNotIn("session-token", json.dumps(result))
 
     def test_browser_login_extracts_user_id_from_encoded_userinfo_cookie(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -580,7 +601,7 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(backend.token, "test-token")
             self.assertEqual(backend.user_id, 456)
 
-    def test_browser_login_exposes_safe_account_greeting_and_persists_identity(self):
+    def test_browser_login_exposes_safe_account_greeting_only_for_this_process(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backend = self.make_backend(root)
@@ -598,9 +619,13 @@ class BackendTests(unittest.TestCase):
                 "authenticated": True, "displayName": "陈同学", "accountName": "20260001",
                 "userId": 456, "greeting": "你好，陈同学！",
             })
-            cached = json.loads((root / "auth.json").read_text(encoding="utf-8"))
-            self.assertEqual(cached["display_name"], "陈同学")
-            self.assertEqual(cached["account_name"], "20260001")
+            self.assertFalse((root / "auth.json").exists())
+            restarted = self.make_backend(root)
+            self.assertEqual(restarted.token, "")
+            self.assertIsNone(restarted.user_id)
+            self.assertEqual(restarted.display_name, "")
+            self.assertEqual(restarted.account_name, "")
+            self.assertFalse(restarted.login_status()["authenticated"])
 
     def test_expired_browser_cookie_is_not_persisted_or_retried_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -626,26 +651,52 @@ class BackendTests(unittest.TestCase):
             self.assertFalse(any("登录信息读取成功" in text for text, _kind in messages))
             self.assertFalse(any("已更新本地应用登录缓存" in text for text, _kind in messages))
 
-    def test_saved_credentials_survive_network_failure_and_restart(self):
+    def test_startup_ignores_legacy_auth_file_and_environment_token(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            backend = self.make_backend(root)
-            backend._apply_token("cached-token", 456, display_name="同学")
-            original = (root / "auth.json").read_bytes()
-            restarted = self.make_backend(root)
-            with patch.object(restarted, "_fetch_courses", side_effect=RuntimeError("浏览器请求失败：TypeError")):
-                self.assertFalse(restarted.load_saved_courses())
-            self.assertEqual((root / "auth.json").read_bytes(), original)
-            self.assertEqual(restarted.headers["Authorization"], "cached-token")
-            with patch.object(restarted, "_fetch_courses", return_value=[Course(101, "课程")]):
-                self.assertTrue(restarted.load_saved_courses())
+            auth_path = root / "auth.json"
+            auth_path.write_text(json.dumps({
+                "token": "legacy-token", "user_id": 456,
+                "display_name": "旧身份", "account_name": "old-account",
+            }), encoding="utf-8")
+            original = auth_path.read_bytes()
+            read_text = Path.read_text
 
-    def test_rejected_different_browser_cookie_preserves_saved_credentials(self):
+            def read_without_auth(path, *args, **kwargs):
+                if path == auth_path:
+                    self.fail("主登录不应读取旧 auth.json")
+                return read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", read_without_auth), patch.dict(os.environ, {"YXY_TOKEN": "env-token"}):
+                backend = self.make_backend(root)
+                with patch.object(backend, "_fetch_courses") as fetch, patch.object(backend, "_relogin_with_account") as relogin:
+                    self.assertFalse(backend.refresh_courses())
+                fetch.assert_not_called()
+                relogin.assert_not_called()
+            self.assertEqual(backend.token, "")
+            self.assertNotIn("Authorization", backend.headers)
+            self.assertIsNone(backend.user_id)
+            self.assertEqual(backend.display_name, "")
+            self.assertEqual(backend.account_name, "")
+            self.assertEqual(auth_path.read_bytes(), original)
+
+    def test_current_session_survives_network_failure_without_persistence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backend = self.make_backend(root)
-            backend._apply_token("cached-token", 456, display_name="同学")
-            original = (root / "auth.json").read_bytes()
+            backend._apply_token("session-token", 456, display_name="同学")
+            with patch.object(backend, "_fetch_courses", side_effect=RuntimeError("浏览器请求失败：TypeError")):
+                self.assertFalse(backend.refresh_courses())
+            self.assertEqual(backend.headers["Authorization"], "session-token")
+            with patch.object(backend, "_fetch_courses", return_value=[Course(101, "课程")]):
+                self.assertTrue(backend.refresh_courses())
+            self.assertFalse((root / "auth.json").exists())
+
+    def test_rejected_different_browser_cookie_preserves_current_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backend = self.make_backend(root)
+            backend._apply_token("session-token", 456, display_name="同学")
             cookies = [{"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "expired-token"}]
             with (
                 patch.object(backend, "_get_ws_url", return_value="ws://test"),
@@ -655,10 +706,10 @@ class BackendTests(unittest.TestCase):
                 self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
                 self.assertFalse(backend.load_session_and_courses(wait_seconds=1, automatic=True))
             self.assertEqual(fetch.call_count, 1)
-            self.assertEqual(backend.token, "cached-token")
-            self.assertEqual(backend.headers["Authorization"], "cached-token")
+            self.assertEqual(backend.token, "session-token")
+            self.assertEqual(backend.headers["Authorization"], "session-token")
             self.assertEqual(backend.display_name, "同学")
-            self.assertEqual((root / "auth.json").read_bytes(), original)
+            self.assertFalse((root / "auth.json").exists())
 
     def test_transient_browser_cookie_failure_can_be_retried(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -841,7 +892,7 @@ class BackendTests(unittest.TestCase):
             self.assertIs(post.call_args.kwargs["allow_redirects"], False)
             self.assertEqual(backend.token, "relogin-token")
             self.assertEqual(backend.headers["Authorization"], "relogin-token")
-            self.assertTrue((root / "auth.json").is_file())
+            self.assertFalse((root / "auth.json").exists())
 
     def test_optional_account_relogin_without_credential_keeps_state_and_reports_failure(self):
         with tempfile.TemporaryDirectory() as directory:

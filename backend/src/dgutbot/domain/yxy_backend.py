@@ -35,7 +35,7 @@ from dgutbot.domain.homework_archive import HomeworkArchive
 from dgutbot.domain.homework_export import HOMEWORK_NODE, append_homework_directory, export_homework
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
-from dgutbot.domain.school_auth import LOGIN_URL, login_headers
+from dgutbot.domain.school_auth import IDENTITY_URL, LOGIN_URL, login_headers
 from dgutbot.logs import append_block_with_header, redact, session_header, stamp
 from dgutbot.domain.sign_monitor import (
     LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
@@ -286,7 +286,7 @@ async function(request) {
                         if message.get("id") != message_id:
                             continue
                         if message.get("error"):
-                            raise RuntimeError("浏览器拒绝恢复登录缓存或创建后台页面")
+                            raise RuntimeError("浏览器拒绝设置登录信息或创建后台页面")
                         return message.get("result") or {}
 
                 authorization = str(self._headers.get("Authorization") or "")
@@ -478,12 +478,6 @@ async function(request) {
             raise RuntimeError("服务返回的数据结构不符合预期")
         return value
 
-# 开源源码不保存任何个人登录信息。发布版会在当前用户的 AppData 中保存本地缓存。
-# 开发时如需临时令牌，请通过环境变量 YXY_TOKEN 提供，切勿提交到仓库。
-TOKEN = os.environ.get("YXY_TOKEN", "")
-USER_ID = None
-
-
 class SignBackend:
     def __init__(
         self,
@@ -499,12 +493,11 @@ class SignBackend:
         # 自动答题是一次性运行授权，不能从上一次程序会话继承。
         self.config.course_quiz_auto_answer = False
         self._migrate_legacy_log()
-        credentials = self._load_credentials()
-        self.token = credentials.get("token") or TOKEN
-        cached_user_id = credentials.get("user_id")
-        self.user_id: int | None = cached_user_id if isinstance(cached_user_id, int) else USER_ID
-        self.display_name = str(credentials.get("display_name") or "").strip()[:80]
-        self.account_name = str(credentials.get("account_name") or "").strip()[:80]
+        # 每次启动都重新读取浏览器登录；凭据与身份只保留在本次进程内存中。
+        self.token = ""
+        self.user_id: int | None = None
+        self.display_name = ""
+        self.account_name = ""
         self.courses: list[Course] = []
         self.selected_course: Course | None = None
         self.browser_start_lock = threading.Lock()
@@ -555,7 +548,6 @@ class SignBackend:
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
-        self.resume_course_recovery()
 
     def resume_course_recovery(self) -> bool:
         """恢复事务不依赖课程列表：已退出的课程可能是账号唯一一门课。"""
@@ -573,14 +565,6 @@ class SignBackend:
         except (OSError, json.JSONDecodeError):
             pass
         return AppConfig.from_mapping(values, self.root)
-
-    def _load_credentials(self) -> dict:
-        """读取当前用户本地保存的登录缓存，不从源码读取任何个人凭据。"""
-        try:
-            values = json.loads((self.root / "auth.json").read_text(encoding="utf-8"))
-            return values if isinstance(values, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            return {}
 
     def _account_path(self) -> Path:
         """账号密码仅作为可选的本机重新登录凭据，不写进源码或 config.json。"""
@@ -628,7 +612,7 @@ class SignBackend:
         except OSError as error:
             self._log(f"保存账号登录设置失败：{error}", "warn")
             return False
-        self._log("已保存账号密码自动重新登录设置；仅会在登录缓存失效时尝试一次。", "success")
+        self._log("已保存账号密码自动重新登录设置；仅会在本次登录失效时尝试一次。", "success")
         return True
 
     def save_config(self) -> None:
@@ -841,7 +825,7 @@ class SignBackend:
 
     def start_course_scan(self, *, force: bool = False) -> dict:
         if not self.courses and self.token:
-            self.load_saved_courses()
+            self.refresh_courses()
         return self.course_scan.start(force=force)
 
     def cancel_course_scan(self) -> dict:
@@ -962,7 +946,7 @@ class SignBackend:
 
     def start_homework_scan(self, *, force: bool = False) -> dict:
         if not self.courses and self.token:
-            self.load_saved_courses()
+            self.refresh_courses()
         return self.homework_scan.start(force=force)
 
     def cancel_homework_scan(self) -> dict:
@@ -1398,19 +1382,6 @@ class SignBackend:
             snapshot.setdefault("video", {})["rate"] = float(self.config.course_playback_rate)
         return snapshot
 
-    def _persist_credentials(self) -> None:
-        """把最近一次有效凭据保存到本地 auth.json，绝不修改或污染源码。"""
-        try:
-            values = {"token": self.token, "user_id": self.user_id}
-            if self.display_name:
-                values["display_name"] = self.display_name
-            if self.account_name:
-                values["account_name"] = self.account_name
-            self._write_json_atomic(self.root / "auth.json", values)
-            self._log("已更新本地应用登录缓存。", "success")
-        except OSError as error:
-            self._log(f"保存本地登录缓存失败：{error}", "warn")
-
     def _apply_token(
         self, token: str, user_id: int | None, *, display_name: str = "", account_name: str = "",
     ) -> None:
@@ -1419,19 +1390,14 @@ class SignBackend:
         self.display_name = display_name.strip()[:80]
         self.account_name = account_name.strip()[:80]
         self.headers["Authorization"] = token
-        self._persist_credentials()
 
     def _discard_credentials(self) -> None:
-        """丢弃已被服务端或登录跳转拒绝的缓存，不再把它当作候选身份。"""
+        """丢弃已被服务端或登录跳转拒绝的内存会话。"""
         self.token = ""
         self.user_id = None
         self.display_name = ""
         self.account_name = ""
         self.headers.pop("Authorization", None)
-        try:
-            (self.root / "auth.json").unlink(missing_ok=True)
-        except OSError:
-            pass
 
     @staticmethod
     def _cookie_value(response: requests.Response, name: str) -> str:
@@ -1504,7 +1470,7 @@ class SignBackend:
         account = self._load_account()
         if not (account.get("enabled") and account.get("username") and account.get("password")):
             return False
-        self._log("登录缓存已失效，正在尝试可选的账号密码重新登录…", "info")
+        self._log("本次登录已失效，正在尝试可选的账号密码重新登录…", "info")
         try:
             # 使用学校当前有效的登录入口；appapi/user/login/app 已不下发任何 Cookie。
             response = requests.post(
@@ -1530,7 +1496,7 @@ class SignBackend:
                 token, user_id, display_name=display_name,
                 account_name=account_name or str(account.get("username") or ""),
             )
-            self._log("账号密码重新登录成功，已更新本地登录缓存。", "success")
+            self._log("账号密码重新登录成功，已更新本次登录会话。", "success")
             return True
         except requests.RequestException as error:
             self._log(f"账号密码重新登录失败：{error}", "warn")
@@ -1544,13 +1510,12 @@ class SignBackend:
     def _is_login_rejected(cls, error: Exception) -> bool:
         return cls._is_unauthorized(error) or isinstance(error, BrowserLoginRedirectError)
 
-    def load_saved_courses(self) -> bool:
-        """使用本地 Token，并通过已打开的 LMS 页面读取课程。"""
+    def refresh_courses(self) -> bool:
+        """只用本次运行已取得的登录信息，通过浏览器刷新课程。"""
         if not self.token:
-            self._log("本地没有可用的登录缓存。", "muted")
-            if not self._relogin_with_account():
-                return False
-        self._log("正在通过浏览器使用本地登录信息读取课程列表…", "info")
+            self._log("请先从浏览器读取当前登录信息。", "muted")
+            return False
+        self._log("正在通过浏览器刷新当前账号的课程列表…", "info")
         try:
             self.courses = self._fetch_courses()
         except Exception as error:
@@ -1565,7 +1530,7 @@ class SignBackend:
                 self._log(f"重新登录后仍无法读取课程：{retry_error}", "warn")
                 return False
         if not self.courses:
-            self._log("未读取到课程，已保留登录缓存，请检查账号与网络状态。", "warn")
+            self._log("未读取到课程，请检查账号与网络状态。", "warn")
             return False
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         self.resume_course_recovery()
@@ -1761,6 +1726,21 @@ class SignBackend:
         self.headers["Authorization"] = candidate_token
         try:
             courses = self._fetch_courses()
+            pending = self.sign_monitor.membership.pending
+            if not courses and pending:
+                # 临时退出的课程可能是唯一课程。重启后仍须用当前浏览器凭据
+                # 核对原账号，再恢复班级，不能为了等课程列表而卡住恢复。
+                identity = self.api.json("POST", IDENTITY_URL, json={})
+                raw_id = str(identity.get("userId") or "")
+                if identity.get("code") == 1 and raw_id.isdigit() and int(raw_id) == pending["userId"]:
+                    _, display_name, account_name = self._browser_identity(dgut)
+                    self._apply_token(candidate_token, int(raw_id), display_name=display_name, account_name=account_name)
+                    self.courses = []
+                    self._rejected_browser_token = ""
+                    self._log("原账号身份已验证，正在继续恢复原班级。", "info")
+                    self.resume_course_recovery()
+                    # 尚无可选课程，前端继续检测，待班级恢复后再读取课程。
+                    return False
         except Exception as error:
             rejected = self._is_login_rejected(error)
             if rejected:
@@ -1791,7 +1771,6 @@ class SignBackend:
         self.user_id, self.display_name, self.account_name = self._browser_identity(dgut)
         self.courses = courses
         self._rejected_browser_token = ""
-        self._persist_credentials()
         self._log("登录信息验证成功，课程列表读取完成。", "success")
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         self.resume_course_recovery()

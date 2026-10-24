@@ -257,7 +257,6 @@ def test_browser_account_switch_invalidates_scan_and_rejects_old_archive_target(
             patch.object(backend, "_cookies", return_value=cookies),
             patch.object(backend, "_fetch_courses", return_value=[Course(88, "B-course")]),
             patch.object(backend, "_browser_identity", return_value=(8, "", "")),
-            patch.object(backend, "_persist_credentials"),
             patch.object(backend, "resume_course_recovery"),
         ):
             assert backend.load_session_and_courses(wait_seconds=1)

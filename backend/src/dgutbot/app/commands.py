@@ -22,12 +22,12 @@ from dgutbot.logs import RunLogSink, append_block, append_block_with_header, red
 from dgutbot.app.updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
-from dgutbot.experimental.ulearning_ai_browser import discover_browser_access, discover_cached_access
+from dgutbot.experimental.ulearning_ai_browser import discover_browser_access, discover_session_access
 from dgutbot.course.ai_quiz import UlearningAiAnswerProvider
 from version import APP_NAME, APP_VERSION, GITHUB_REPO
 
 
-# 配置、登录缓存、浏览器资料、日志与更新状态统一写入 LocalAppData。
+# 配置、浏览器资料、日志与更新状态统一写入 LocalAppData；主登录会话只在内存中保留。
 ROOT = data_root()
 ROOT.mkdir(parents=True, exist_ok=True)
 class EventBuffer:
@@ -210,42 +210,42 @@ EVENT_BUFFER.subscribe(RUN_LOG.on_event)
 HOMEWORK_INPUT = HomeworkInput(lambda: int(backend.config.debug_port))
 
 
-def _cached_course_ids() -> list[int]:
+def _session_course_ids() -> list[int]:
     selected = [backend.selected_course.id] if backend.selected_course is not None else []
     return list(dict.fromkeys(selected + [course.id for course in backend.courses]))
 
 
 def _resolve_ai_access(debug_port: int):
-    """Prefer the app login cache; keep the open-browser path as a fallback."""
-    cached_error: UlearningAiError | None = None
+    """优先使用本次登录会话，保留已打开的浏览器 AI 上下文作为回退。"""
+    session_error: UlearningAiError | None = None
     if not backend.courses:
-        backend.load_saved_courses()
+        backend.refresh_courses()
     if backend.token and backend.courses:
         try:
-            return discover_cached_access(
+            return discover_session_access(
                 backend.token,
-                _cached_course_ids(),
+                _session_course_ids(),
                 user_agent=backend.headers.get("User-Agent", ""),
             )
         except UlearningAiError as error:
-            cached_error = error
+            session_error = error
             # A stale token may be recoverable through the existing, bounded
             # optional account-login flow; credentials never leave SignBackend.
-            if backend.load_saved_courses():
+            if backend.refresh_courses():
                 try:
-                    return discover_cached_access(
+                    return discover_session_access(
                         backend.token,
-                        _cached_course_ids(),
+                        _session_course_ids(),
                         user_agent=backend.headers.get("User-Agent", ""),
                     )
                 except UlearningAiError as retry_error:
-                    cached_error = retry_error
+                    session_error = retry_error
     try:
         return discover_browser_access(int(debug_port))
     except UlearningAiError as browser_error:
         raise UlearningAiError(
-            "未找到可用的登录缓存或课程 AI 上下文；请先让程序读取课程。"
-        ) from (cached_error or browser_error)
+            "未找到可用的当前登录会话或课程 AI 上下文；请先从浏览器登录并读取课程。"
+        ) from (session_error or browser_error)
 
 
 AI_BRIDGE = UlearningAiBridge(
@@ -426,10 +426,9 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             after_seq = 0
         return {"ok": True, **EVENT_BUFFER.get_events(after_seq)}
-    if command == "load_saved_courses":
-        ok = backend.load_saved_courses()
-        return {"ok": ok, "courses": courses(), "login": backend.login_status(),
-                "hasCachedCredentials": bool(backend.token)}
+    if command == "refresh_courses":
+        ok = backend.refresh_courses()
+        return {"ok": ok, "courses": courses(), "login": backend.login_status()}
     if command == "get_login_status":
         return {"ok": True, "login": backend.login_status()}
     if command == "ai_chat":
@@ -514,7 +513,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 AI_BRIDGE.probe(backend.config.course_ai_model_id)
             except UlearningAiError:
-                return {"ok": False, "error": "未找到可用的登录缓存、课程 AI 或所选模型；请先在程序中读取课程。"}
+                return {"ok": False, "error": "未找到可用的当前登录会话、课程 AI 或所选模型；请先从浏览器登录并读取课程。"}
             provider = UlearningAiAnswerProvider(
                 AI_BRIDGE, backend.course_controller.emit, backend.config.course_ai_model_id,
             )

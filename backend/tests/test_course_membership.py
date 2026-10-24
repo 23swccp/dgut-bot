@@ -305,7 +305,8 @@ def test_pending_approval_survives_restart_without_duplicate_join(setup):
     assert restarted.pending and platform.count("addClass") == 1
 
 
-def test_backend_restart_recovers_with_no_selected_course_or_feature_flag(setup):
+@pytest.mark.parametrize("has_courses", [True, False])
+def test_backend_restart_waits_for_browser_login_then_recovers_without_selection_or_feature_flag(setup, has_courses):
     monitor, platform, path, _ = setup
     monitor.tick()
     (path.parent / "auth.json").write_text(json.dumps({"token": "example", "user_id": 7}))
@@ -315,9 +316,46 @@ def test_backend_restart_recovers_with_no_selected_course_or_feature_flag(setup)
 
     with patch("dgutbot.domain.sign_monitor.requests.request", side_effect=transport):
         backend = SignBackend(Mock(), root=path.parent)
+        assert backend.monitor_thread is None
+        assert not platform.enrolled and path.exists()
+        with (
+            patch.object(backend, "_get_ws_url", return_value="ws://fixture"),
+            patch.object(backend, "_cookies", return_value=[
+                {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "fresh-token"},
+                {"domain": ".dgut.edu.cn", "name": "userid", "value": "7"},
+            ]),
+            patch.object(backend, "_fetch_courses", return_value=[Course(99, "另一门课程")] if has_courses else []),
+            patch.object(backend.api, "json", return_value={"code": 1, "userId": 7}) as identity,
+        ):
+            assert backend.load_session_and_courses(wait_seconds=1, automatic=True) is has_courses
+            if has_courses:
+                identity.assert_not_called()
+            else:
+                identity.assert_called_once_with("POST", "https://application.dgut.edu.cn/classroomapi/users/getUserInfo", json={})
         worker = backend.monitor_thread
         if worker is not None:
             worker.join(2)
             assert not worker.is_alive()
     assert backend.selected_course is None and not backend.config.selection_auto_leave
     assert platform.enrolled and not path.exists()
+
+
+@pytest.mark.parametrize("identity", [{"code": 1, "userId": 8}, {"code": 0, "userId": 7}, {"code": 1}])
+def test_restart_without_courses_does_not_recover_for_unverified_or_different_browser_user(setup, identity):
+    monitor, platform, path, _ = setup
+    monitor.tick()
+    backend = SignBackend(Mock(), root=path.parent)
+    with (
+        patch.object(backend, "_get_ws_url", return_value="ws://fixture"),
+        patch.object(backend, "_cookies", return_value=[
+            {"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "fresh-token"},
+            {"domain": ".dgut.edu.cn", "name": "userid", "value": "7"},
+        ]),
+        patch.object(backend, "_fetch_courses", return_value=[]),
+        patch.object(backend.api, "json", return_value=identity),
+    ):
+        assert not backend.load_session_and_courses(wait_seconds=1, automatic=True)
+    assert backend.monitor_thread is None
+    assert backend.token == "" and backend.user_id is None
+    assert "Authorization" not in backend.headers
+    assert path.exists() and not platform.enrolled and platform.count("addClass") == 0

@@ -1,0 +1,32 @@
+.sign-unavailable {
+  justify-content: safe center;
+  align-items: center;
+  gap: 28px;
+  padding: 48px 32px;
+  text-align: center;
+  overflow-y: auto;
+}
+
+.sign-unavailable > * {
+  flex-shrink: 0;
+}
+
+.sign-unavailable h1 {
+  margin: 0;
+  color: #242936;
+  font-size: clamp(72px, 12vw, 144px);
+  font-weight: 900;
+  line-height: 1.15;
+  letter-spacing: 0.08em;
+  text-indent: 0.08em;
+}
+
+.sign-unavailable p {
+  max-width: 900px;
+  margin: 0;
+  color: #5b6473;
+  font-size: clamp(20px, 2.6vw, 32px);
+  font-weight: 600;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}

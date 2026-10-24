@@ -130,7 +130,7 @@ def test_emit_keeps_the_declared_module_on_the_event(tmp_path, monkeypatch):
     buffer = commands.EventBuffer()
     monkeypatch.setattr(commands, "EVENT_BUFFER", buffer)
     commands.emit("第 1 轮：正在检查《示例》…", "info", "sign")
-    commands.emit("登录缓存已更新。", "success")
+    commands.emit("本次登录会话已更新。", "success")
     commands.emit_event("UPDATE_HANDOFF", "success", "update", "正在退出应用")
     assert [commands.log_module(event) for event in buffer.get_events()["events"]] == ["sign", "app", "update"]
 

@@ -156,7 +156,7 @@ def _assistant_from_workbench(access: BrowserAiAccess) -> str:
     return str(usable[0]["id"])
 
 
-def discover_cached_access(
+def discover_session_access(
     authorization: str,
     course_ids: Iterable[str | int],
     *,
@@ -167,9 +167,9 @@ def discover_cached_access(
     normalized = [str(value).strip() for value in course_ids if value is not None]
     candidates = tuple(dict.fromkeys(value for value in normalized if value))
     if not token:
-        raise UlearningAiError("No cached LMS login is available.")
+        raise UlearningAiError("No current LMS login is available.")
     if not candidates:
-        raise UlearningAiError("No cached course is available for the AI service.")
+        raise UlearningAiError("No current course is available for the AI service.")
 
     for course_id in candidates:
         workbench_query = urlencode({
@@ -193,7 +193,7 @@ def discover_cached_access(
             referer=urlunsplit(("https", AI_HOST, f"/ai/{assistant_id}", direct_query, "")),
             user_agent=pending.user_agent,
         )
-    raise UlearningAiError("None of the cached courses has an available AI assistant.")
+    raise UlearningAiError("None of the current courses has an available AI assistant.")
 
 
 def _targets(port: int) -> list[dict[str, Any]]:

@@ -9,6 +9,7 @@ import { type UpdateStatus } from "./updateClient";
 import { UpdateSettings } from "./UpdateSettings";
 import { UpdateDialog, useUpdateDialog } from "./UpdateDialog";
 import { AboutGuide } from "./AboutGuide";
+import { SignUnavailablePage } from "./SignUnavailablePage";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
 import { LogPanel } from "./LogPanel";
 import { CoursewareExportPanel } from "./CoursewareExportPanel";
@@ -36,7 +37,7 @@ type AppConfig = {
 };
 type AppInfo = { appName: string; version: string; repo: string };
 type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string; classroomId?: number | null; classroomName?: string; classrooms?: Classroom[]; classroomSelectionRequired?: boolean; activityMonitoring?: boolean; recoveryPending?: boolean; membershipPhase?: string; recoveryCourseName?: string; recoveryError?: string };
-type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; hasCachedCredentials?: boolean; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
+type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
@@ -61,7 +62,7 @@ function classroomChoices(rooms?: Classroom[]): SignChoice[] {
 
 function App() {
   const [page, setPage] = useState<Page>("terminal");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const reduceMotion = useReducedMotion();
   const [phase, setPhase] = useState<Phase>("ready");
   const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null);
@@ -167,7 +168,7 @@ function App() {
     void call("get_settings").then(result => {
       if (result.ok && result.config) {
         loadConfig(result.config);
-        append("本地后端已连接，正在自动读取本地登录缓存…");
+        append("本地后端已连接，正在准备读取浏览器当前登录状态…");
         if (!signInitializationStartedRef.current) {
           signInitializationStartedRef.current = true;
           void initializeSignIn();
@@ -444,18 +445,10 @@ function App() {
   }
   async function initializeSignIn() {
     setBusy(true);
-    const result = await call("load_saved_courses");
-    acceptLoginStatus(result.login);
-    if (result.ok && result.courses?.length) {
-      setCourses(result.courses);
-      setPhase("courses");
-      setBusy(false);
-      return;
-    }
-    append(result.hasCachedCredentials ? "暂时未能读取课程，登录缓存已保留，正在打开学校页面恢复连接…" : "没有可用的登录缓存，正在自动打开优学院登录页…");
+    append("正在打开优学院，程序将读取浏览器当前登录状态…");
     setPhase("login");
     const opened = await call("start_browser", loginPayload);
-    append(opened.ok ? (result.hasCachedCredentials ? "学校页面已准备好，程序将自动检查登录状态。" : "登录页已准备好。请在浏览器中完成登录，程序将自动继续。") : `启动浏览器失败：${opened.error || "未知错误"}`);
+    append(opened.ok ? "学校页面已准备好。如未登录，请在浏览器中完成登录，程序将自动继续。" : `启动浏览器失败：${opened.error || "未知错误"}`);
     setBusy(false);
   }
   async function refreshCourseScan(force = true) {
@@ -572,14 +565,7 @@ function App() {
     if (phase === "login") {
       append("正在自动检测浏览器登录状态，请稍候。");
     } else if (phase === "ready") {
-      const result = await call("load_saved_courses");
-      acceptLoginStatus(result.login);
-      if (result.ok && result.courses?.length) { setCourses(result.courses); setPhase("courses"); }
-      else {
-        append(result.hasCachedCredentials ? "暂时未能读取课程，登录缓存已保留，正在打开学校页面恢复连接…" : "没有可用的登录缓存，正在自动打开优学院登录页…"); setPhase("login");
-        const opened = await call("start_browser", loginPayload);
-        append(opened.ok ? (result.hasCachedCredentials ? "学校页面已准备好，程序将自动检查登录状态。" : "请在浏览器中完成登录，程序将自动继续。") : `启动浏览器失败：${opened.error || "未知错误"}`);
-      }
+      await initializeSignIn();
     } else if (phase === "selected") {
       if (input === "/") { await call("clear_selected_course"); setSelectedSignCourse(null); setPhase("courses"); append("已取消选定。"); }
       else if (!input) { const result = await call("start_monitor"); if (result.ok) setPhase("monitoring"); else append(result.error || "启动失败", "warning"); }
@@ -638,47 +624,7 @@ function App() {
         ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
-      {page === "terminal" && <section className={`terminal sign-terminal ${phase === "courses" || phase === "classrooms" ? "course-picking" : ""}`}>
-        {(signStatus.recoveryPending || signStatus.recoveryError) && <aside className="course-recovery-notice" role="status" aria-live="polite"><strong>{signStatus.recoveryCourseName || "课程"} · {signStatus.membershipPhase === "withdrawn" ? "已临时退课" : "待恢复原班级"}</strong><p>{signStatus.recoveryError || signStatus.lastResult}</p>{signStatus.recoveryPending && <button className="secondary" disabled={busy} onClick={async () => { setBusy(true); const result = await call("recover_course_membership"); setBusy(false); if (result.signStatus) setSignStatus(result.signStatus); if (!result.ok) append(result.error || "恢复失败，记录已保留"); }}>立即加回并停止</button>}</aside>}
-        <div className="sign-event-log" ref={signLogRef} aria-label="签到关键事件">
-          <div className="sign-day-label">今天</div>
-          {displayedSignEvents.length === 0 && <div className="event-empty">暂无关键事件</div>}
-          {displayedSignEvents.map(event => <article className={`sign-event ${event.tone}`} key={event.id}>
-            <time>{formatClock(event.time)}</time><span className="sign-event-mark" aria-hidden="true">{event.symbol}</span>
-            <div><strong>{event.title}</strong>{event.detail && <small>{event.detail}</small>}</div>
-          </article>)}
-          {signStatus.running && <article className="sign-event live" aria-label="持续监测中">
-            <time>{formatClock(signStatus.lastCheck)}</time><span className="sign-event-mark" aria-hidden="true"><i /></span>
-            <div><strong>{signStatus.round ? `持续监测中 · 第 ${signStatus.round} 轮已完成` : "正在进行首次检查"}</strong><small>{signStatus.round ? `${signStatus.lastResult} · ${nextCheckSeconds} 秒后再次检查` : "正在读取课堂和签到活动"}</small></div>
-          </article>}
-        </div>
-        {selectedClassroom && (phase === "selected" || phase === "monitoring") && <SelectedSignChoice item={selectedClassroom} busy={busy}
-          onChange={phase === "selected" ? () => void loadSignClassrooms() : undefined} />}
-        <div className="command"><b>›</b><input ref={commandRef} aria-label="课程签到命令" autoFocus disabled={busy || phase === "login"} value={command} onChange={event => setCommand(event.target.value)} onKeyDown={handleSignKeyDown} placeholder={busy ? "正在读取登录信息或课堂…" : phase === "login" ? "等待浏览器登录，完成后自动继续…" : phase === "courses" ? "搜索课程，↑↓ 选择，Enter 确认…" : phase === "classrooms" ? "搜索课堂，Enter 确认，输入 / 重新选课…" : phase === "selected" ? "按 Enter 开始监测，输入 / 重新选课…" : phase === "monitoring" ? "正在监测；输入 / 停止…" : "正在准备签到模块…"}/></div>
-        {(phase === "courses" || phase === "classrooms") && <motion.div className="course-quick-pick" ref={coursePickerRef}
-          initial={reduceMotion ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
-          <SignChoicePicker label={phase === "courses" ? "选择签到课程" : "选择签到课堂"}
-            items={phase === "courses" ? matchingCourses : matchingClassrooms}
-            total={phase === "courses" ? courseChoices.length : classroomPickChoices.length}
-            cursor={courseCursor} busy={busy} onCursor={setCourseCursor} onChoose={id => {
-              if (phase === "classrooms") void chooseSignClassroom(id);
-              else { const course = courseChoices.find(item => item.id === id); if (course) void chooseSignCourse(course); }
-            }} />
-          {phase === "classrooms" && <button type="button" className="secondary compact" disabled={busy}
-            onClick={() => void loadSignClassrooms()}>刷新课堂</button>}
-        </motion.div>}
-        <div className="sign-overview" aria-label="签到监测状态">
-          <div className="sign-overview-main">
-            <span className={`sign-radar ${signStatus.running ? "active" : ""}`} aria-hidden="true">◎</span>
-            <div><div className="sign-course-line"><strong>{signCourseName}</strong><span className={`sign-state ${signStatus.running ? "running" : ""}`}><i />{signStatus.running ? "监测中" : phase === "selected" ? "等待启动" : phase === "courses" || phase === "classrooms" ? "等待选择" : "未运行"}</span></div><p>{signStatus.running ? signStatus.lastResult : phase === "selected" ? "按 Enter 开始监测" : phase === "classrooms" ? "请选择课堂；尚未开课时可刷新" : "选择课程和课堂后即可开始监测签到"}</p></div>
-          </div>
-          <div className="sign-stats">
-            <StatusItem label="最近检查" value={formatClock(signStatus.lastCheck)} />
-            <StatusItem label="下次检查" value={signStatus.running ? `${nextCheckSeconds} 秒` : "--"} />
-            <StatusItem label="已检查" value={`${signStatus.round} 次`} />
-          </div>
-        </div>
-      </section>}
+      {page === "terminal" && <SignUnavailablePage />}
       {page === "learning" && <section className="terminal learning-terminal">
         <div className="learning-flow" aria-label="未完成课件">
           <div className="lesson-scan-head"><div className="lesson-scan-summary"><strong>未完成课件</strong><span>
