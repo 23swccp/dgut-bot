@@ -58,10 +58,13 @@ CLIENT_HEARTBEAT_TIMEOUT = 120.0
 CLIENT_CLOSE_GRACE = 1.0
 
 
-def client_connection_expired(client_connected: bool, last_seen: float, now: float | None = None) -> bool:
-    """关闭通知丢失时，根据心跳延迟回收本地服务。"""
+def client_connection_expired(
+    client_connected: bool, last_seen: float, now: float | None = None, *, started_at: float | None = None,
+) -> bool:
+    """关闭通知丢失或页面从未连接时，给无人使用的服务设置有限等待时间。"""
     current = time.monotonic() if now is None else now
-    return bool(client_connected and current - last_seen >= CLIENT_HEARTBEAT_TIMEOUT)
+    since = last_seen if client_connected else started_at
+    return since is not None and current - since >= CLIENT_HEARTBEAT_TIMEOUT
 
 
 def configure_console_encoding() -> str:
@@ -323,6 +326,7 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
         update_manager.set_exit_callback(SHUTDOWN_EVENT.set, stop_backend_tasks)
         update_manager.start_auto_check()
         client_connected = False
+        service_started_at = time.monotonic()
         browser_lifetime = BrowserLifetime(int(backend.config.debug_port), web_port)
         close_requested_at: float | None = None
         while not SHUTDOWN_EVENT.is_set():
@@ -341,7 +345,7 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
                     return 0
             else:
                 close_requested_at = None
-            if (client_connection_expired(client_connected, last_seen)
+            if (client_connection_expired(client_connected, last_seen, started_at=service_started_at)
                     and browser_lifetime.present is not True and not AGENT_SERVICE.active()):
                 return 0
             SHUTDOWN_EVENT.wait(0.2)
