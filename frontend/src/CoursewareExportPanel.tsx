@@ -4,7 +4,7 @@ import {
   RefreshCw, Search, SearchX, Square, TriangleAlert,
 } from "lucide-react";
 import {
-  classifyCourses, currentSemester, defaultExportOptions, exportStateLabel, filterExportCourses, hasExportSelection, selectVisible, semesterOptions,
+  classifyCourses, currentSemester, defaultExportOptions, exportStateLabel, filterExportCourses, hasExportSelection, selectionAlreadyExported, selectVisible, semesterOptions,
   type ExportCourse, type ExportStatus, type SemesterCourse,
 } from "./coursewareView";
 import { CoursewareExportFilters } from "./CoursewareExportFilters";
@@ -69,6 +69,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
   const visibleSelectedCount = visible.filter(course => selected.includes(course.id)).length;
   const active = status?.state === "running" || status?.state === "cancelling";
   const locked = active || pending || catalogLoading;
+  const alreadyExported = selectionAlreadyExported(status, chosen.map(course => course.id), options);
   const failedCourses = status?.results.filter(item => item.state === "error" || item.failures.length > 0).length || 0;
   const emptyCourses = status?.results.filter(
     item => item.state === "completed" && item.pageTotal === 0 && item.fileWritten === 0,
@@ -141,6 +142,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
   }, [active]);
 
   async function start() {
+    if (locked || alreadyExported) return;
     setPending(true); setError("");
     const result = await command("start_courseware_export", { courseIds: chosen.map(course => course.id), options });
     if (result.ok && result.coursewareExport) {
@@ -157,6 +159,13 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
     const result = await command("cancel_courseware_export");
     if (result.ok && result.coursewareExport) setStatus(result.coursewareExport);
     else setError(result.error || "停止导出失败");
+    setPending(false);
+  }
+
+  async function openFolder() {
+    setPending(true); setError("");
+    const result = await command("open_courseware_export_folder");
+    if (!result.ok) setError(result.error || "打开导出文件夹失败");
     setPending(false);
   }
 
@@ -379,9 +388,9 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
 
     <CoursewareExportFilters courses={chosen} options={options} onChange={setOptions}
       locked={active || pending} onLoading={setCatalogLoading} />
-    <div className="cw-export-actions"><span>已选 {chosen.length} 门课程 · 按上方范围与类型导出</span>
-      <button className="primary" disabled={locked || !hasExportSelection(chosen, options)} onClick={() => void start()}>
-        {pending ? "处理中…" : chosen.length ? `导出所选 ${chosen.length} 门` : "选择课程后导出"}
+    <div className="cw-export-actions"><span>{alreadyExported ? "当前选择已导出，调整课程或筛选后可再次导出。" : `已选 ${chosen.length} 门课程 · 按上方范围与类型导出`}</span>
+      <button className={`primary${alreadyExported ? " is-complete" : ""}`} disabled={locked || alreadyExported || !hasExportSelection(chosen, options)} onClick={() => void start()}>
+        {pending ? "处理中…" : active ? (status?.state === "cancelling" ? "正在停止…" : "导出中…") : alreadyExported ? "已导出" : chosen.length ? `导出所选 ${chosen.length} 门` : "选择课程后导出"}
       </button>
     </div>
 
@@ -405,12 +414,14 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
         <span className="cw-progress-percent">{progressPercent}%</span>
         {failedCourses > 0 && <span className="cw-progress-warn"><TriangleAlert size={12} aria-hidden="true" />{failedCourses} 门存在失败项</span>}
         {emptyCourses > 0 && <span className="cw-progress-muted">{emptyCourses} 门未发现资料</span>}
+        {!active && status.results.some(item => item.folder) && <button className="secondary cw-stop" disabled={pending} onClick={() => void openFolder()}>打开文件夹</button>}
         {active && <button className="secondary cw-stop" disabled={pending || status.state === "cancelling"} onClick={() => void cancel()}>
           <Square size={12} aria-hidden="true" />{status.state === "cancelling" ? "停止中…" : "停止队列"}
         </button>}
       </header>
       {active && <p className="cw-progress-note">停止后保留已保存内容：当前文件处理结束后停止，后续课程不再执行。</p>}
       {status.error && <p className="cw-alert" role="alert"><TriangleAlert size={14} aria-hidden="true" />{status.error}</p>}
+      {status.folderOpenError && <p className="cw-alert" role="alert"><TriangleAlert size={14} aria-hidden="true" />{status.folderOpenError}</p>}
       <ul className="cw-jobs">
         {status.results.map(item => {
           const empty = item.state === "completed" && item.pageTotal === 0 && item.fileWritten === 0;

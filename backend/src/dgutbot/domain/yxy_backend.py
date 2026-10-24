@@ -552,6 +552,7 @@ class SignBackend:
             authenticated=lambda: bool(self.token),
             redact=self._redact,
             log=lambda text, kind: self._log(text, kind, "courseware"),
+            on_completed=self._open_courseware_directory,
         )
         self._auto_course_lock = threading.Lock()
         self._auto_course_generation = 0
@@ -940,6 +941,25 @@ class SignBackend:
 
     def cancel_courseware_export(self) -> dict:
         return self.courseware_export.cancel()
+
+    def _open_courseware_directory(self, folder: Path) -> Path:
+        path = folder.resolve()
+        root = (self.root / "courseware").resolve()
+        if not path.is_relative_to(root) or not path.is_dir():
+            raise ValueError("导出文件夹不存在或不在课件目录中")
+        if os.name == "nt":
+            os.startfile(str(path))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+        return path
+
+    def open_courseware_export_folder(self) -> Path:
+        folder = self.courseware_export.output_folder()
+        if folder is None:
+            raise ValueError("当前没有可打开的导出结果")
+        return self._open_courseware_directory(folder)
 
     def start_homework_scan(self, *, force: bool = False) -> dict:
         if not self.courses and self.token:

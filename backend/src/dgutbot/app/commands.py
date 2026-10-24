@@ -320,7 +320,7 @@ def _record_command(
         if detail:
             parts.append(detail)
         level = "error" if error is not None else ("info" if outcome == "成功" else "warning")
-        module = "courseware" if command in {"start_courseware_export", "cancel_courseware_export", "get_courseware_export_catalog"} else ""
+        module = "courseware" if command in {"start_courseware_export", "cancel_courseware_export", "get_courseware_export_catalog", "open_courseware_export_folder"} else ""
         EVENT_BUFFER.emit_event("COMMAND", level, "command", " · ".join(parts), module=module)
     except Exception:  # 日志失败绝不能影响命令本身
         pass
@@ -587,6 +587,11 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "coursewareExport": backend.cancel_courseware_export()}
     if command == "get_courseware_export_status":
         return {"ok": True, "coursewareExport": backend.courseware_export_status()}
+    if command == "open_courseware_export_folder":
+        try:
+            return {"ok": True, "folder": str(backend.open_courseware_export_folder())}
+        except (ValueError, OSError) as error:
+            return {"ok": False, "error": str(error)}
     if command == "open_scanned_course":
         item_id = str(payload.get("itemId") or "")
         if not item_id:

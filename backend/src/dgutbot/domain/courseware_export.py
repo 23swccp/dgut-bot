@@ -794,6 +794,7 @@ class CoursewareExportService:
         authenticated: Callable[[], bool] = lambda: True,
         redact: Callable[[object], str] = str,
         log: Callable[[str, str], None] | None = None,
+        on_completed: Callable[[Path], None] | None = None,
     ) -> None:
         self._root = Path(root)
         self._library = CoursewareLibrary(self._root, redact=redact)
@@ -804,6 +805,7 @@ class CoursewareExportService:
         self._authenticated = authenticated
         self._redact = redact
         self._log = log
+        self._on_completed = on_completed
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
@@ -811,6 +813,8 @@ class CoursewareExportService:
         self._queue: list[dict[str, Any]] = []
         self._queue_state = "idle"
         self._active_index = -1
+        self._request: dict[str, Any] | None = None
+        self._folder_open_error = ""
 
     @staticmethod
     def _empty() -> dict[str, Any]:
@@ -827,6 +831,7 @@ class CoursewareExportService:
                 results[self._active_index] = dict(self._snapshot)
             return json.loads(json.dumps(self._snapshot | {
                 "state": self._queue_state, "results": results, "root": str(self._root),
+                "request": self._request, "folderOpenError": self._folder_open_error,
                 "courseTotal": len(results),
                 "courseDone": sum(item["state"] not in {"queued", "running", "cancelling", "skipped"}
                                   for item in results),
@@ -841,6 +846,9 @@ class CoursewareExportService:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return self.snapshot()
+            filters = options or ExportOptions()
+            self._request = {"courseIds": [str(course.id) for course in courses], "options": filters.payload()}
+            self._folder_open_error = ""
             self._queue = [self._empty() | {
                 "courseId": str(course.id), "courseName": str(course.name), "state": "queued",
             } for course in courses]
@@ -854,7 +862,7 @@ class CoursewareExportService:
                 return self.snapshot()
             self._cancel = threading.Event()
             self._queue_state = "running"
-            self._thread = threading.Thread(target=self._run_queue, args=(courses, options or ExportOptions()), name="courseware-export", daemon=True)
+            self._thread = threading.Thread(target=self._run_queue, args=(courses, filters), name="courseware-export", daemon=True)
             self._thread.start()
             return self.snapshot()
 
@@ -864,6 +872,14 @@ class CoursewareExportService:
             if self._queue_state == "running":
                 self._queue_state = "cancelling"
         return self.snapshot()
+
+    def output_folder(self) -> Path | None:
+        """单课程定位该课程，多课程定位总目录；不接受客户端提供的路径。"""
+        with self._lock:
+            if self._queue_state in {"idle", "running", "cancelling"}:
+                return None
+            folders = [Path(item["folder"]) for item in self._queue if item.get("folder")]
+            return (folders[0] if len(self._queue) == 1 else self._root) if folders else None
 
     def _run_queue(self, courses: list[Any], options: ExportOptions) -> None:
         # 第一门仍进入原有取消落盘流程，保留单课程接口的行为。
@@ -887,6 +903,17 @@ class CoursewareExportService:
             self._queue_state = ("auth_required" if self._snapshot["state"] == "auth_required" else
                                  "cancelled" if self._cancel.is_set() else
                                  "error" if all(item["state"] == "error" for item in self._queue) else "completed")
+            completed = self._queue_state == "completed"
+        folder = self.output_folder() if completed else None
+        # 只在本次队列结束时打开一次；状态轮询、重新进入页面都不触发。
+        if folder is not None and self._on_completed is not None:
+            try:
+                self._on_completed(folder)
+            except Exception as error:
+                with self._lock:
+                    self._folder_open_error = self._redact(error)
+                if self._log is not None:
+                    self._log(self._redact(error), "warn")
 
     def _run(self, course: Any, options: ExportOptions) -> None:
         """任何未预期异常都必须落到终态，不能让快照永远停在 running。"""

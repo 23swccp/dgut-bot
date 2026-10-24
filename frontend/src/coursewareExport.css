@@ -36,6 +36,7 @@
 .cw-export-actions{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:10px 14px;background:#f6faf8;border:1px solid #dcebe2;border-radius:10px}
 .cw-export-actions span{font-size:12px;color:#628373}
 .cw-export-actions button{margin:0;font-size:13px;padding:9px 20px}
+.cw-export-actions .is-complete:disabled{background:#edf2ef;color:#64796c;border:1px solid #dce6df;opacity:1;box-shadow:none}
 @media(max-width:760px){.cw-filter-row legend{float:none;width:auto;margin-bottom:9px}.cw-catalog-course header{align-items:flex-start;flex-direction:column}.cw-export-actions{align-items:stretch;flex-direction:column}.cw-catalog-head{flex-wrap:wrap}}
 
 /* 筛选栏 */
