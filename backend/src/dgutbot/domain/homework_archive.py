@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 
@@ -95,4 +96,12 @@ class HomeworkArchive:
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(temporary, self.path)
+        # 与课程恢复文件一致：Windows 短暂占用目标时，保留原子替换并限次重试。
+        for attempt in range(4):
+            try:
+                os.replace(temporary, self.path)
+                return
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.05 * (attempt + 1))

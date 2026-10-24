@@ -1,0 +1,209 @@
+/* 课件导出：与设置页一致的紧凑工具风，避免大色块与漂浮卡片。 */
+.cw-page{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px;color:#344054}
+.cw-page p{margin:0}
+.cw-page code{display:inline;padding:1px 5px;border-radius:5px;background:#f2f5f7;color:#4d5c6d;font:11px/1.7 "Cascadia Mono",monospace}
+.cw-nobr{display:inline-flex;white-space:nowrap}
+
+/* 标题 */
+.cw-head{display:flex;align-items:flex-start;gap:12px}
+.cw-head-icon{flex:none;display:grid;width:32px;height:32px;place-items:center;border-radius:9px;background:#e9f8ef;color:#009b55;margin-top:1px}
+.cw-head-text{flex:1;min-width:0}
+.cw-head-text h2{font-size:23px;line-height:1.25;letter-spacing:-.4px;color:#273244;margin:0}
+.cw-head-text p{margin-top:4px;max-width:780px;font-size:13px;line-height:1.7;color:#7d8998}
+.cw-refresh{flex:none;display:inline-flex;align-items:center;gap:6px;margin:1px 0 0;padding:8px 13px;font-size:12px;border-radius:9px}
+.cw-spin{animation:cw-spin 1s linear infinite}
+@keyframes cw-spin{to{transform:rotate(360deg)}}
+
+.cw-filters{display:grid;gap:14px;padding:18px;border:1px solid #e2e7ec;border-radius:12px;background:#fff}
+.cw-filter-heading h3{margin:0 0 4px;color:#273244;font-size:16px}
+.cw-filter-heading p,.cw-catalog-head p{font-size:12px;color:#7d8998;line-height:1.7}
+.cw-filter-row{display:flex;flex-wrap:wrap;gap:12px 20px;border:0;padding:0;margin:0;min-width:0}
+.cw-filter-row legend{float:left;width:120px;font-size:12px;font-weight:600;line-height:20px;color:#586577}
+.cw-filter-row label{display:inline-flex;gap:7px;align-items:center;font-size:12px;cursor:pointer}
+.cw-page .cw-filter-note{font-size:11.5px;line-height:1.7;color:#8995a5}
+.cw-catalog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:12px;border-top:1px solid #edf1f4}
+.cw-catalog-head strong{font-size:13px;color:#344054}
+.cw-catalog-head button{margin:0;font-size:12px;flex:none}
+.cw-catalog-list{display:grid;gap:12px;max-height:420px;overflow-y:auto;scrollbar-width:thin}
+.cw-catalog-course{display:grid;gap:4px}
+.cw-catalog-course header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:#f6f9f8;border-radius:6px;font-size:12px}
+.cw-catalog-course header span{color:#7d8998;white-space:nowrap;font-size:11px}
+.cw-catalog-course header button{border:0;background:transparent;color:#00894c;font-size:11px;cursor:pointer;margin-left:8px;padding:3px}
+.cw-catalog-item{display:flex;gap:9px;align-items:center;padding:8px 10px;font-size:12px;cursor:pointer;border-radius:6px}
+.cw-catalog-item:hover{background:#f1fbf5}
+.cw-catalog-item span{flex:1;overflow-wrap:anywhere}
+.cw-catalog-item small{color:#8995a5;font-size:11px;flex:none}
+.cw-export-actions{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:10px 14px;background:#f6faf8;border:1px solid #dcebe2;border-radius:10px}
+.cw-export-actions span{font-size:12px;color:#628373}
+.cw-export-actions button{margin:0;font-size:13px;padding:9px 20px}
+.cw-export-actions .is-complete:disabled{background:#edf2ef;color:#64796c;border:1px solid #dce6df;opacity:1;box-shadow:none}
+@media(max-width:760px){.cw-filter-row legend{float:none;width:auto;margin-bottom:9px}.cw-catalog-course header{align-items:flex-start;flex-direction:column}.cw-export-actions{align-items:stretch;flex-direction:column}.cw-catalog-head{flex-wrap:wrap}}
+
+/* 筛选栏 */
+.cw-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.cw-terms{display:flex;flex-wrap:wrap;gap:6px}
+.cw-term{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #dfe5e9;border-radius:999px;background:#fff;color:#4c5b6c;font:600 12px "Microsoft YaHei UI",sans-serif;cursor:pointer;transition:border-color .15s,background .15s,color .15s}
+.cw-term:hover{border-color:#bcd9c9;color:#0f7a4d}
+.cw-term.is-current{border-color:#bfe3cf;background:#e9f8ef;color:#008a4b}
+.cw-term span{margin-left:1px;padding:1px 6px;border-radius:999px;background:#ffffffb0;color:#2f8a5f;font-size:10px;font-weight:600;font-variant-numeric:tabular-nums}
+.cw-search{flex:1;display:flex;align-items:center;gap:8px;min-width:220px;height:36px;padding:0 10px 0 12px;border:1px solid #dfe5e9;border-radius:9px;background:#fff;color:#93a0af;transition:border-color .15s,box-shadow .15s}
+.cw-search:focus-within{border-color:#9ed3b6;box-shadow:0 0 0 3px #009b5512}
+.cw-search input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:#2e3b4b;font-size:13px}
+.cw-search input::placeholder{color:#9aa5b1}
+.cw-search-kbd{display:inline-flex;align-items:center;justify-content:center;height:18px;min-width:18px;padding:0 4px;border-radius:4px;border:1px solid #e2e7ec;background:#f8f9fa;color:#9aa5b1;font:11px "Cascadia Mono",monospace;line-height:1;user-select:none}
+.cw-search-clear{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:50%;background:#eaeff2;color:#64748b;font-size:14px;line-height:1;cursor:pointer;padding:0;transition:background .15s,color .15s}
+.cw-search-clear:hover{background:#d8e2e6;color:#334155}
+
+/* 勾选框统一视觉 */
+.cw-page input[type=checkbox]{flex:none;width:16px;height:16px;margin:0;border-radius:5px;accent-color:#009b55;cursor:pointer}
+.cw-page input[type=checkbox]:disabled{cursor:not-allowed}
+
+/* 主体：左列表、右摘要 */
+.cw-body{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,.85fr);align-items:start;gap:14px}
+
+/* 列表卡片与头部栏 */
+.cw-list-container{position:relative;display:flex;flex-direction:column;border:1px solid #e2e7ec;border-radius:12px;background:#fff;overflow:hidden}
+.cw-list-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-bottom:1px solid #edf1f4;background:#fbfcfd;user-select:none}
+.cw-selectall-bar{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;font-weight:600;color:#344054;transition:color .15s}
+.cw-selectall-bar:hover{color:#00894c}
+.cw-list-header-meta{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#7b8495}
+.cw-list-header-count{font:11.5px "Cascadia Mono",monospace;font-variant-numeric:tabular-nums;color:#7b8495}
+.cw-list-header-count b{color:#00894c;font-weight:700}
+
+.cw-list{height:clamp(300px,calc(100vh - 340px),470px);overflow-y:auto;padding:6px 6px 26px;background:#fff;scrollbar-color:#c3ccd4 transparent;scrollbar-width:thin}
+.cw-group{margin:0}
+.cw-group h3{position:sticky;top:-6px;z-index:1;display:flex;align-items:center;justify-content:space-between;margin:0;padding:9px 10px 7px;background:#fffffff2;color:#8b96a4;font:600 11px "Microsoft YaHei UI",sans-serif;letter-spacing:.4px;backdrop-filter:blur(6px)}
+.cw-group h3 span{font:11px "Cascadia Mono",monospace;font-variant-numeric:tabular-nums;color:#a2adba}
+
+.cw-course{display:flex;align-items:center;gap:12px;padding:10px 11px;border:1px solid transparent;border-radius:9px;cursor:pointer;user-select:none;transition:background .18s cubic-bezier(0.2,0,0,1),border-color .18s cubic-bezier(0.2,0,0,1),box-shadow .18s cubic-bezier(0.2,0,0,1)}
+.cw-course + .cw-course{margin-top:2px}
+.cw-course:hover{background:#f8faf9;border-color:#e5ece8;box-shadow:0 1px 2px rgba(21,32,43,0.03)}
+.cw-course.is-checked{background:#f1fbf5;border-color:#bfe3cf;box-shadow:0 1px 2px rgba(0,155,85,0.04)}
+.cw-course.is-checked:hover{background:#ebf8f1;border-color:#acdcc1}
+.cw-course:focus-within{outline:none;border-color:#8ed0ad;box-shadow:0 0 0 2px rgba(0,155,85,0.12)}
+.cw-course-text{flex:1;min-width:0;display:grid;gap:3px}
+.cw-course-text strong{overflow-wrap:anywhere;color:#273343;font-size:14px;font-weight:600;line-height:1.45}
+.cw-course.is-checked .cw-course-text strong{color:#0b6c43}
+.cw-course-text small{overflow:hidden;color:#8b96a4;font-size:11.5px;text-overflow:ellipsis;white-space:nowrap}
+.cw-course-id{flex:none;padding:2px 7px;border-radius:6px;background:#f4f6f8;color:#9aa5b1;font:11px/1.6 "Cascadia Mono",monospace;font-variant-numeric:tabular-nums;letter-spacing:.2px}
+.cw-course.is-checked .cw-course-id{background:#e2f4ea;color:#4f9373}
+
+/* 底部滚动提示 */
+.cw-list-fade{position:absolute;bottom:0;left:0;right:0;height:42px;background:linear-gradient(to bottom,rgba(255,255,255,0),#fff 55%);pointer-events:none;opacity:0;transition:opacity .2s ease;display:flex;align-items:flex-end;justify-content:center;padding-bottom:4px}
+.cw-list-fade.is-visible{opacity:1}
+.cw-list-fade span{font-size:10.5px;color:#8b96a4;background:#ffffffeb;padding:1px 9px;border-radius:999px;border:1px solid #e2e7ec;box-shadow:0 1px 2px rgba(21,32,43,0.04)}
+
+/* 右侧摘要 */
+.cw-rail{position:sticky;top:0;display:flex;flex-direction:column;gap:10px;padding:16px;border:1px solid #e2e7ec;border-radius:12px;background:#fff}
+.cw-rail-head{display:flex;align-items:center;justify-content:space-between}
+.cw-rail-tag{font:600 11px "Microsoft YaHei UI",sans-serif;letter-spacing:.5px;color:#8b96a4;text-transform:uppercase}
+.cw-rail-clear-link{border:0;background:transparent;padding:0;font-size:11.5px;color:#8b96a4;cursor:pointer;transition:color .15s}
+.cw-rail-clear-link:hover:not(:disabled){color:#dc2626}
+.cw-rail-count{display:flex;align-items:baseline;gap:8px}
+.cw-rail-count b{color:#00894c;font:700 33px "Cascadia Mono",monospace;font-variant-numeric:tabular-nums;letter-spacing:-1.2px;line-height:1}
+.cw-rail-count span{color:#8b96a4;font-size:12px}
+.cw-chosen{max-height:168px;margin:0;padding:0;overflow:auto;display:grid;gap:4px;list-style:none;scrollbar-width:thin}
+.cw-chosen li{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px;border-radius:7px;background:#f6f9f8;color:#344054;font-size:12px}
+.cw-chosen-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cw-chosen-remove{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border:0;border-radius:4px;background:transparent;color:#9aa5b1;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:background .15s,color .15s}
+.cw-chosen-remove:hover:not(:disabled){background:#e7ecea;color:#344054}
+.cw-rail-hint{color:#9aa5b1;font-size:11px;line-height:1.6}
+.cw-rail-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:22px 12px;gap:6px}
+.cw-rail-empty-icon{display:grid;place-items:center;width:44px;height:44px;border-radius:10px;background:#f2f6f4;color:#628373;margin-bottom:2px}
+.cw-rail-empty strong{font-size:13px;font-weight:600;color:#344054}
+.cw-rail-empty p{font-size:11.5px;color:#8b96a4;line-height:1.6}
+
+/* 正在运行快捷提示横条 */
+.cw-rail-active-banner{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:8px;background:#e0f2fe;border:1px solid #bae6fd;color:#0369a1;cursor:pointer;transition:background .15s,border-color .15s}
+.cw-rail-active-banner:hover{background:#d4edfc;border-color:#93c5fd}
+.cw-rail-active-dot{width:8px;height:8px;border-radius:50%;background:#0284c7;box-shadow:0 0 0 0 rgba(2,132,199,0.5);animation:cw-pulse 1.8s infinite;flex:none}
+@keyframes cw-pulse{0%{box-shadow:0 0 0 0 rgba(2,132,199,0.6)}70%{box-shadow:0 0 0 6px rgba(2,132,199,0)}100%{box-shadow:0 0 0 0 rgba(2,132,199,0)}}
+.cw-rail-active-info{display:flex;flex-direction:column;gap:1px;font-size:11.5px}
+.cw-rail-active-info strong{font-weight:600;color:#0c4a6e}
+.cw-rail-active-info span{font-size:10.5px;color:#0284c7}
+
+.cw-rail-actions{display:flex;gap:8px;margin-top:2px}
+.cw-rail-actions .primary{flex:2;margin:0;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 14px;font-size:13px;border-radius:9px}
+.cw-rail-actions .secondary{flex:1;margin:0;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 12px;font-size:13px;border-radius:9px}
+.cw-page .cw-rail-path{margin-top:6px;color:#a0aab6;font-size:11px;line-height:1.75}
+
+/* 提示与空状态 */
+.cw-alert{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1px solid #f0d4ce;border-radius:9px;background:#fdf4f2;color:#a8433a;font-size:12px;line-height:1.6}
+.cw-alert svg{flex:none;margin-top:2px}
+.cw-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:48px 20px;color:#7b8495;text-align:center}
+.cw-empty-icon{display:grid;place-items:center;width:52px;height:52px;border-radius:12px;background:#f0f4f2;color:#5d7568;margin-bottom:2px}
+.cw-empty strong{color:#273244;font-size:14.5px;font-weight:600}
+.cw-empty span{font-size:12.5px;color:#7b8495;max-width:320px;line-height:1.6}
+
+/* 进度 */
+.cw-progress{padding:16px 18px;border:1px solid #e2e7ec;border-radius:12px;background:#fff;scroll-margin-top:16px}
+.cw-progress-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.cw-progress-title{display:flex;align-items:baseline;gap:8px;min-width:150px}
+.cw-progress-title strong{color:#273244;font-size:14px}
+.cw-progress-title span{color:#8b96a4;font:12px "Cascadia Mono",monospace;font-variant-numeric:tabular-nums}
+.cw-progress-bar{flex:1;min-width:160px;height:7px;overflow:hidden;border-radius:999px;background:#edf1f4}
+.cw-progress-bar-fill{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#009b55,#22c55e);transition:width .35s cubic-bezier(0.4,0,0.2,1)}
+.cw-progress-bar-fill.is-active{background:linear-gradient(90deg,#009b55,#0284c7);background-size:200% 100%;animation:cw-progress-active 2s linear infinite}
+@keyframes cw-progress-active{0%{background-position:100% 0}100%{background-position:-100% 0}}
+.cw-progress-bar-fill.has-warn{background:linear-gradient(90deg,#009b55,#f59e0b)}
+.cw-progress-percent{font:600 12px "Cascadia Mono",monospace;font-variant-numeric:tabular-nums;color:#344054;min-width:36px;text-align:right}
+.cw-progress-warn{display:inline-flex;align-items:center;gap:4px;color:#a36029;font-size:11.5px}
+.cw-progress-muted{color:#9aa5b1;font-size:11.5px}
+.cw-stop{display:inline-flex;align-items:center;gap:6px;margin:0;padding:7px 12px;font-size:12px}
+.cw-page .cw-progress-note{margin-top:8px;color:#93a0af;font-size:11.5px}
+
+.cw-jobs{display:grid;gap:9px;margin:14px 0 0;padding:0;list-style:none}
+.cw-job{padding:12px;border:1px solid #edf1f4;border-radius:10px;background:#fbfcfd;transition:border-color .15s,background .15s}
+.cw-job.running{border-color:#bae6fd;background:#f8fbfe}
+.cw-job.completed{border-color:#cbe8d8;background:#fafdfb}
+.cw-job.error,.cw-job.auth_required{border-color:#fecaca;background:#fdf8f8}
+.cw-job.cancelling{border-color:#fde68a;background:#fffdfa}
+.cw-job.cancelled{border-color:#e5e7eb;background:#f9fafb}
+.cw-job.empty{border-color:#edf1f4;background:#fbfcfd}
+.cw-page .cw-job-empty{margin-top:6px;color:#9aa5b1;font-size:11.5px;line-height:1.6}
+.cw-job-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.cw-job-head strong{min-width:0;overflow-wrap:anywhere;color:#2c3949;font-size:13px;font-weight:600}
+
+/* 6 种状态药丸 */
+.cw-pill{display:inline-flex;flex:none;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid transparent;font-variant-numeric:tabular-nums}
+.cw-pill.completed{background:#e6f7ee;color:#00894c;border-color:#bfe3cf}
+.cw-pill.running{background:#e0f2fe;color:#0284c7;border-color:#bae6fd;font-weight:600}
+.cw-pill.queued{background:#f1f5f9;color:#475569;border-color:#cbd5e1}
+.cw-pill.cancelling{background:#fef3c7;color:#b45309;border-color:#fde68a}
+.cw-pill.cancelled{background:#f3f4f6;color:#6b7280;border-color:#e5e7eb}
+.cw-pill.error,.cw-pill.auth_required{background:#fee2e2;color:#dc2626;border-color:#fecaca}
+.cw-pill.empty{background:#f8fafc;color:#64748b;border-color:#e2e8f0}
+
+/* 迷你章节进度条 */
+.cw-job-bar-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.cw-job-bar{flex:1;height:4px;background:#edf1f4;border-radius:999px;overflow:hidden}
+.cw-job-bar-fill{display:block;height:100%;border-radius:999px;background:#0284c7;transition:width .3s ease}
+.cw-job-bar-fill.is-completed{background:#009b55}
+.cw-job-bar-fill.is-error,.cw-job-bar-fill.is-auth_required{background:#dc2626}
+.cw-job-bar-fill.is-cancelling,.cw-job-bar-fill.is-cancelled{background:#d97706}
+.cw-job-bar-fill.is-empty{background:#94a3b8}
+.cw-job-bar-percent{flex:none;font:11px/1 "Cascadia Mono",monospace;font-variant-numeric:tabular-nums;color:#8b96a4;width:32px;text-align:right}
+
+.cw-job-metrics{display:flex;flex-wrap:wrap;gap:3px 14px;margin-top:6px;color:#8894a3;font:11px "Cascadia Mono",monospace;font-variant-numeric:tabular-nums}
+.cw-job-metrics b{font-weight:600;color:#54637a}
+.cw-page .cw-job-folder{display:block;margin-top:6px;padding:0;background:none;color:#9aa5b1;font-size:11px;white-space:normal;overflow-wrap:anywhere}
+.cw-job-failures{margin-top:7px;font-size:11.5px;color:#8a5a39}
+.cw-job-failures summary{cursor:pointer;color:#8a6a4a}
+.cw-job-failures p{margin:3px 0 0;padding-left:12px;color:#8a5a39;line-height:1.6}
+.cw-page .cw-root{margin-top:10px;color:#9aa5b1;font-size:11px;overflow-wrap:anywhere}
+
+@media (max-width:1120px){
+  .cw-body{grid-template-columns:minmax(0,1fr)}
+  .cw-rail{position:static;order:2}
+  .cw-list{height:clamp(280px,42vh,420px)}
+}
+@media (max-width:760px){
+  .cw-head{flex-wrap:wrap}
+  .cw-refresh{order:3;margin-left:44px}
+  .cw-search{order:3;min-width:100%}
+  .cw-course-id{display:none}
+  .cw-rail-actions{flex-direction:column}
+  .cw-progress-head{gap:8px}
+  .cw-progress-bar{min-width:100%;order:4}
+  .cw-progress-percent{order:5;margin-left:auto}
+}
