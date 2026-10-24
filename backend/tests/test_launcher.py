@@ -74,13 +74,35 @@ class BrowserLauncherTests(unittest.TestCase):
                 watch = stack.enter_context(patch('browser_launcher.BrowserLifetime')).return_value
                 watch.closed.return_value = browser_closed
                 watch.present = None
-                stack.enter_context(patch('browser_launcher.time.monotonic', side_effect=[10, 11]))
+                stack.enter_context(patch('browser_launcher.time.monotonic', side_effect=[0, 10, 11]))
                 stack.enter_context(patch('browser_launcher.client_last_seen', return_value=0))
                 active = stack.enter_context(patch('browser_launcher.AGENT_SERVICE.active', return_value=True))
                 self.assertEqual(browser_launcher.run_background_service(8765, True), 0)
                 shutdown.wait.assert_not_called()
                 active.assert_not_called()
                 stop_tasks.assert_called_once()
+
+    def test_startup_timeout_reclaims_orphan_but_keeps_open_ui_or_active_agent(self):
+        for present, task_active, exits in ((None, False, True), (False, False, True),
+                                          (True, False, False), (None, True, False)):
+            with self.subTest(present=present, task_active=task_active), ExitStack() as stack:
+                for name in ('NamedMutex', 'new_runtime', 'configure_agent_registry', 'configure_agent_api',
+                             'publish_runtime', 'remove_runtime', 'reset_client_state', 'stop_process',
+                             'threading.Thread', 'update_manager', 'ThreadingHTTPServer', 'stop_backend_tasks'):
+                    stack.enter_context(patch('browser_launcher.' + name))
+                shutdown = stack.enter_context(patch('browser_launcher.SHUTDOWN_EVENT'))
+                shutdown.is_set.side_effect = [False, True]
+                closed = stack.enter_context(patch('browser_launcher.CLIENT_CLOSED_EVENT'))
+                closed.is_set.return_value = False
+                watch = stack.enter_context(patch('browser_launcher.BrowserLifetime')).return_value
+                watch.closed.return_value = False
+                watch.present = present
+                stack.enter_context(patch('browser_launcher.time.monotonic', side_effect=[
+                    0, browser_launcher.CLIENT_HEARTBEAT_TIMEOUT + 1]))
+                stack.enter_context(patch('browser_launcher.client_last_seen', return_value=0))
+                stack.enter_context(patch('browser_launcher.AGENT_SERVICE.active', return_value=task_active))
+                self.assertEqual(browser_launcher.run_background_service(8765, True), 0)
+                self.assertEqual(shutdown.wait.call_count, 0 if exits else 1)
 
     def setUp(self):
         # 离线回归不弹出会等待人工操作的系统窗口。
@@ -189,6 +211,14 @@ class BrowserLauncherTests(unittest.TestCase):
         timeout = browser_launcher.CLIENT_HEARTBEAT_TIMEOUT
         self.assertFalse(browser_launcher.client_connection_expired(True, 100 - timeout + 0.1, now=100))
         self.assertTrue(browser_launcher.client_connection_expired(True, 100 - timeout, now=100))
+
+    def test_service_without_any_client_also_has_a_startup_deadline(self):
+        started_at = 100.0
+        timeout = browser_launcher.CLIENT_HEARTBEAT_TIMEOUT
+        self.assertFalse(browser_launcher.client_connection_expired(
+            False, 0, now=started_at + timeout - 0.1, started_at=started_at))
+        self.assertTrue(browser_launcher.client_connection_expired(
+            False, 0, now=started_at + timeout, started_at=started_at))
 
     @patch("browser_launcher.time.sleep")
     @patch("builtins.print")
@@ -367,6 +397,31 @@ class BrowserLauncherTests(unittest.TestCase):
             with urlopen(heartbeat, timeout=3):
                 pass
             self.assertFalse(CLIENT_CLOSED_EVENT.is_set())
+            self.assertGreater(client_last_seen(), 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            reset_client_state()
+
+    def test_late_command_does_not_cancel_frontend_close_signal(self):
+        reset_client_state()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LocalApiHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+        try:
+            closed = Request(f"http://127.0.0.1:{port}/api/client-closed", data=b"", method="POST")
+            with urlopen(closed, timeout=3):
+                pass
+            request = Request(
+                f"http://127.0.0.1:{port}/api/command",
+                data=json.dumps({"command": "get_app_info", "payload": {}}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(request, timeout=3) as response:
+                self.assertTrue(json.load(response)["ok"])
+            self.assertTrue(CLIENT_CLOSED_EVENT.is_set())
             self.assertGreater(client_last_seen(), 0)
         finally:
             server.shutdown()
