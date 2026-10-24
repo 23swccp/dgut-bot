@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, KeyRound, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
 import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
@@ -11,14 +11,13 @@ import { UpdateDialog, useUpdateDialog } from "./UpdateDialog";
 import { AboutGuide } from "./AboutGuide";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
 import { LogPanel } from "./LogPanel";
-import { IndependentLoginPanel } from "./IndependentLoginPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import { filterSignChoices, firstSignChoiceCursor, SelectedSignChoice, SignChoicePicker, stepSignChoiceCursor, type SignChoice } from "./SignChoicePicker";
 import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStatus, type LessonItem } from "./courseScanView";
 import "./courseScan.css";
 import "./homeworkInput.css";
 
-type Page = "terminal" | "learning" | "homework" | "logs" | "account" | "settings" | "about";
+type Page = "terminal" | "learning" | "homework" | "logs" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "classrooms" | "selected" | "monitoring";
 type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
 type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
@@ -44,7 +43,6 @@ const moduleIcons: Record<Page, LucideIcon> = {
   learning: BookOpenCheck,
   homework: PenLine,
   logs: ScrollText,
-  account: KeyRound,
   settings: Settings,
   about: CircleQuestionMark,
 };
@@ -601,8 +599,8 @@ function App() {
     if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "homework", "logs", "account", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", logs: "运行日志", account: "独立登录", settings: "设置", about: "关于" };
+  const navItems: Page[] = ["terminal", "learning", "homework", "logs", "settings", "about"];
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", homework: "作业", logs: "运行日志", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -718,11 +716,6 @@ function App() {
       {page !== "terminal" && page !== "learning" && <div className={`settings-body ${page === "about" ? "about-settings-body" : ""}`}>
       {page === "homework" && <HomeworkInputPanel />}
       {page === "logs" && <LogPanel call={call} />}
-      {page === "account" && <SettingsSection className="utility-settings" title="独立登录" subtitle="单独登录并核对一个账号的身份；凭据只保留在本次后端会话中，与签到账号互不影响。">
-        <div className="settings-surface">
-        <IndependentLoginPanel />
-        </div>
-      </SettingsSection>}
       {page === "settings" && <SettingsSection className="utility-settings" title="设置">
         <div className="settings-surface">
         <Card title="课堂活动监测" desc="签到成功后继续检查；发现选人会退出课程，活动或课堂结束后恢复原班级。重新加入可能需要教师审核。">
