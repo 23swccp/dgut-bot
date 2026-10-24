@@ -14,6 +14,7 @@ ID 提醒：优学院课程 ID 与 LMS 课程 ID 不通用，``wholepage`` 也�
 from __future__ import annotations
 
 import html as html_module
+import hashlib
 import json
 import os
 import re
@@ -23,9 +24,10 @@ from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable, Iterable
-from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit
 
 from dgutbot.domain.course_scan import AuthRequiredError
+from dgutbot.domain.courseware_filters import ExportOptions, attachment_kind, source_kind
 
 # 优学院网关：与 LMS 的 /courseapi 不同，学习页数据走 /uaapi 前缀。
 UA_BASE = "https://ua.dgut.edu.cn/uaapi"
@@ -381,7 +383,11 @@ def _resource_key(url: str) -> str:
     if host in {"lms.dgut.edu.cn", "uobs.dgut.edu.cn"} and path.startswith("/uobs/view/"):
         host = "uobs.dgut.edu.cn"
         path = path[len("/uobs"):]
-    return f"{host}{path}"
+    query = parts.query
+    if host in {"lms.dgut.edu.cn", "uobs.dgut.edu.cn"} and path.startswith("/view/"):
+        query = urlencode([(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                           if key.lower() not in {"token", "authorization", "ua-authorization", "ts"}])
+    return f"{parts.scheme.lower()}://{host}{':' + str(parts.port) if parts.port else ''}{path}?{query}"
 
 
 def _prefer_attachment(left: ExportAttachment, right: ExportAttachment) -> ExportAttachment:
@@ -595,6 +601,14 @@ class CoursewareLibrary:
         files: list[str] = []
         failures: list[dict[str, str]] = []
         local_links: dict[str, str] = {}
+        identities: dict[str, str] = {}
+        identity_path = folder / FILE_DIR / f"{page.page_index:02d}" / ".sources.json"
+        try:
+            previous_identities = json.loads(identity_path.read_text(encoding="utf-8"))
+            if not isinstance(previous_identities, dict):
+                previous_identities = {}
+        except (OSError, ValueError):
+            previous_identities = {}
         used: set[str] = set()
         for attachment in page.attachments:
             if download is None:
@@ -603,7 +617,10 @@ class CoursewareLibrary:
             # 各页拥有各自的附件目录，同章其它页面不会覆盖或误用同名文件。
             target = folder / FILE_DIR / f"{page.page_index:02d}" / name
             used.add(name.lower())
-            if not (attachment.size and target.exists() and target.stat().st_size == attachment.size):
+            # 文件名和大小相同也可能是另一份附件；来源只存哈希，避免认证 URL 落盘。
+            identity = hashlib.sha256(_resource_key(attachment.url).encode("utf-8")).hexdigest()
+            if not (previous_identities.get(name) == identity and attachment.size
+                    and target.is_file() and target.stat().st_size == attachment.size):
                 try:
                     download(attachment.url, target)
                 except Exception as error:  # 单个附件失败不能影响正文导出
@@ -619,13 +636,16 @@ class CoursewareLibrary:
                         else:
                             download_error = None
                     if download_error is not None:
-                        retained = target.is_file()
+                        retained = target.is_file() and previous_identities.get(name) == identity
                         reason = ("刷新失败，已保留上次文件：" if retained else "") + self._redact(download_error)
                         failures.append({"file": name, "reason": reason[:160]})
                         if not retained:
                             continue
             files.append(target.relative_to(course_dir).as_posix())
+            identities[name] = identity
             local_links[attachment.url] = _link_path(target.relative_to(folder).as_posix())
+        if identities:
+            _write_json(identity_path, identities)
         markdown, html = _page_links(page, local_links)
         written = 0
         unchanged = 0
@@ -769,6 +789,7 @@ class CoursewareExportService:
         root: Path,
         directory: Callable[[Any], Any],
         chapter: Callable[[str], Any],
+        directory_for_options: Callable[[Any, ExportOptions], Any] | None = None,
         download: Callable[[str, Path], int] | None = None,
         authenticated: Callable[[], bool] = lambda: True,
         redact: Callable[[object], str] = str,
@@ -777,6 +798,7 @@ class CoursewareExportService:
         self._root = Path(root)
         self._library = CoursewareLibrary(self._root, redact=redact)
         self._directory = directory
+        self._directory_for_options = directory_for_options
         self._chapter = chapter
         self._download = download
         self._authenticated = authenticated
@@ -810,10 +832,10 @@ class CoursewareExportService:
                                   for item in results),
             }))
 
-    def start(self, course: Any) -> dict[str, Any]:
-        return self.start_many([course])
+    def start(self, course: Any, *, options: ExportOptions | None = None) -> dict[str, Any]:
+        return self.start_many([course], options=options)
 
-    def start_many(self, courses: list[Any]) -> dict[str, Any]:
+    def start_many(self, courses: list[Any], *, options: ExportOptions | None = None) -> dict[str, Any]:
         if not courses:
             raise ValueError("请至少选择一门课程")
         with self._lock:
@@ -832,7 +854,7 @@ class CoursewareExportService:
                 return self.snapshot()
             self._cancel = threading.Event()
             self._queue_state = "running"
-            self._thread = threading.Thread(target=self._run_queue, args=(courses,), name="courseware-export", daemon=True)
+            self._thread = threading.Thread(target=self._run_queue, args=(courses, options or ExportOptions()), name="courseware-export", daemon=True)
             self._thread.start()
             return self.snapshot()
 
@@ -843,7 +865,7 @@ class CoursewareExportService:
                 self._queue_state = "cancelling"
         return self.snapshot()
 
-    def _run_queue(self, courses: list[Any]) -> None:
+    def _run_queue(self, courses: list[Any], options: ExportOptions) -> None:
         # 第一门仍进入原有取消落盘流程，保留单课程接口的行为。
         for index, course in enumerate(courses):
             with self._lock:
@@ -853,7 +875,7 @@ class CoursewareExportService:
                 self._snapshot = self._queue[index] | {
                     "state": "running", "startedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
                 }
-            self._run(course)
+            self._run(course, options)
             with self._lock:
                 self._queue[index] = dict(self._snapshot)
                 if self._snapshot["state"] == "auth_required":
@@ -866,16 +888,17 @@ class CoursewareExportService:
                                  "cancelled" if self._cancel.is_set() else
                                  "error" if all(item["state"] == "error" for item in self._queue) else "completed")
 
-    def _run(self, course: Any) -> None:
+    def _run(self, course: Any, options: ExportOptions) -> None:
         """任何未预期异常都必须落到终态，不能让快照永远停在 running。"""
         try:
-            self._run_course(course)
+            self._run_course(course, options)
         except Exception as error:  # noqa: BLE001 - 后台线程没有调用方可以承接异常
             self._finish("error", self._redact(error))
 
-    def _run_course(self, course: Any) -> None:
+    def _run_course(self, course: Any, options: ExportOptions) -> None:
         try:
-            payload = self._directory(course)
+            payload = (self._directory_for_options(course, options) if self._directory_for_options
+                       else self._directory(course))
         except AuthRequiredError as error:
             self._finish("auth_required", self._redact(error))
             return
@@ -883,6 +906,13 @@ class CoursewareExportService:
             self._finish("error", self._redact(error))
             return
         course_name, chapters = parse_directory(payload)
+        if {node for node in options.chapters.get(str(course.id), ()) if source_kind(node) in options.sources} - {
+            str(chapter["nodeid"]) for chapter in chapters
+        }:
+            raise ValueError("所选目录已变化，请重新读取目录后选择")
+        # 保留原章节序号；仅筛选部分章节时不得改变其已有磁盘路径。
+        chapters = [dict(chapter, export_index=index) for index, chapter in enumerate(chapters, 1)
+                    if options.includes(str(course.id), str(chapter["nodeid"]))]
         course_name = course_name or str(getattr(course, "name", "") or "")
         try:
             course_dir = self._library.course_dir(course_name, str(getattr(course, "id", "") or ""))
@@ -919,13 +949,20 @@ class CoursewareExportService:
                 failures.extend(dict(item, chapter=title, reason=self._redact(item["reason"]))
                                 for item in page_payload.failures)
             else:
-                pages = parse_chapter(page_payload, chapter_title=title, chapter_index=index)
+                pages = parse_chapter(page_payload, chapter_title=title, chapter_index=chapter["export_index"])
             chapter_records: list[dict[str, Any]] = []
             page_failed = isinstance(page_payload, ExportSectionResult) and bool(page_payload.failures)
             for page in pages:
                 if self._cancel.is_set():
                     stopped = True
                     break
+                attachments = tuple(attachment for attachment in page.attachments
+                                    if attachment_kind(attachment.name, attachment.url) in options.kinds)
+                if "text" not in options.kinds and not attachments:
+                    continue
+                page = replace(page, attachments=attachments)
+                if "text" not in options.kinds:
+                    page = replace(page, markdown="", html=render_page_html(chapter=page.chapter, title=page.title, fragments=[]))
                 try:
                     record = self._library.write_page(course_dir, page, download=self._download)
                 except Exception as error:
@@ -943,10 +980,10 @@ class CoursewareExportService:
                     self._snapshot["pageUnchanged"] += int(record["written"] == 0)
                     self._snapshot["fileWritten"] += len(record["files"])
                     self._snapshot["failures"] = list(failures)
-            if not stopped and not page_failed:
+            if not stopped and not page_failed and options.kinds == ExportOptions().kinds:
                 # 完整刷新的章节可替换旧记录；失败或取消章节保留上次成功结果。
                 current_paths = {record["path"] for record in chapter_records}
-                old_folder = f"{index:02d}_{safe_name(title) or '未命名章节'}"
+                old_folder = f"{chapter['export_index']:02d}_{safe_name(title) or '未命名章节'}"
                 records = [record for record in records if record["path"] in current_paths or not (
                     record.get("chapterId") == node or (
                         not record.get("chapterId") and record["path"].split("/")[0] == old_folder

@@ -419,6 +419,7 @@ def test_existing_attachment_with_matching_size_is_not_downloaded_again():
             attachments=(ExportAttachment(name="a.pdf", url="https://ua.dgut.edu.cn/a.pdf", size=5),),
         )
         download = Mock(side_effect=AssertionError("不应重复下载"))
+        library.write_page(course_dir, page_value, download=lambda _url, path: path.write_bytes(b"12345"))
         record = library.write_page(course_dir, page_value, download=download)
         download.assert_not_called()
         assert record["files"] == ["01_第一章/_files/01/a.pdf"]
@@ -619,7 +620,8 @@ def test_backend_batch_validates_all_ids_and_keeps_sign_selection(tmp_path):
     with pytest.raises(ValueError):
         backend.start_courseware_exports([])
     backend.start_courseware_exports(["1", "2", "1"])
-    backend.courseware_export.start_many.assert_called_once_with(backend.courses)
+    from dgutbot.domain.courseware_filters import ExportOptions
+    backend.courseware_export.start_many.assert_called_once_with(backend.courses, options=ExportOptions())
     assert backend.selected_course is backend.courses[1]
 
 
@@ -894,6 +896,7 @@ def test_failed_attachment_refresh_keeps_previous_offline_link(tmp_path):
     old = course_dir / value.folder / "_files" / "01" / "clip.mp4"
     old.parent.mkdir(parents=True)
     old.write_bytes(b"previous-media")
+    library.write_page(course_dir, value, download=lambda _url, path: path.write_bytes(b"previous-media"))
     adapter = DownloadAdapter(content=b'{"error":"get file error"}')
     with patch.object(requests.Session, "get_adapter", return_value=adapter):
         record = library.write_page(course_dir, value, download=lambda url, dest: download_file(url, dest, token=""))
