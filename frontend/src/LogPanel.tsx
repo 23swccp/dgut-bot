@@ -9,7 +9,7 @@ export type LogEvent = {
 type Caller = (command: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown> & { ok: boolean; error?: string }>;
 
 const MODULE_LABELS: Record<string, string> = {
-  sign: "签到", course: "刷课", homework: "作业", agent: "Agent", update: "更新", app: "程序",
+  sign: "签到", course: "刷课", courseware: "课件导出", homework: "作业", agent: "Agent", update: "更新", app: "程序",
 };
 
 const LEVEL_LABELS: Record<string, string> = { info: "信息", success: "成功", warning: "警告", error: "错误" };

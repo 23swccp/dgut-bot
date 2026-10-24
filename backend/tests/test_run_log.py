@@ -202,3 +202,24 @@ def test_command_recording_skips_polls_and_keeps_key_names_only(tmp_path, monkey
     assert "get_events" not in content
     assert "hunter2" not in content
     assert "payload: password,username" in content
+
+
+def test_courseware_commands_and_results_have_a_separate_log_module(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from dgutbot.app import commands
+    from dgutbot.domain.yxy_backend import SignBackend
+
+    backend = SignBackend(commands.emit, root=tmp_path)
+    buffer = commands.EventBuffer()
+    monkeypatch.setattr(commands, "EVENT_BUFFER", buffer)
+    monkeypatch.setattr(commands, "backend", backend)
+    assert commands.handle("get_courseware_export_status", {})["ok"]
+    assert buffer.get_events()["events"] == []
+    backend.start_courseware_exports = Mock(side_effect=ValueError("课程不在当前列表中，请先刷新课程"))
+    result = commands.handle("start_courseware_export", {"courseIds": ["101"]})
+    assert not result["ok"] and result["error"] == "课程不在当前列表中，请先刷新课程"
+    backend.courseware_export._log("课件导出已取消，已保存内容保留", "warn")
+    events = buffer.log_page(module="courseware")["events"]
+    assert len(events) == 2
+    assert all(event["module"] == "courseware" for event in events)
+    assert {event["level"] for event in events} == {"warning"}
