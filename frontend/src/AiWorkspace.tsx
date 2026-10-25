@@ -88,7 +88,7 @@ export function AiWorkspace() {
 
   return <main className="ai-shell">
     <header className="ai-header">
-      <div className="ai-brand"><span>✦</span><div><strong>AI 工作台</strong><small>优学院课程 AI · 实验功能</small></div></div>
+      <div className="ai-brand"><span>✦</span><div><strong>AI 工作台</strong></div></div>
       <div className="ai-header-actions">
         <label className="ai-model-select"><span>模型</span><select aria-label="AI 模型" value={modelId} disabled={busy || modelsLoading || models.length === 0} onChange={event => void chooseModel(Number(event.target.value))}>
           {modelsLoading && <option value={modelId}>读取中…</option>}
@@ -102,7 +102,6 @@ export function AiWorkspace() {
       {messages.length === 0 && <div className="ai-empty">
         <div className="ai-orb">✦</div>
         <h1>从课程上下文开始</h1>
-        <p>程序从浏览器登录并读取课程后，就能在本次运行中直接连接课程 AI。登录失效时，请重新登录后让程序读取课程。</p>
         <div className="ai-suggestions">
           {["梳理这门课的重点", "解释一个课程概念", "制定本周复习计划"].map(text => <button key={text} type="button" onClick={() => { setInput(text); inputRef.current?.focus(); }}>{text}</button>)}
         </div>
@@ -125,7 +124,6 @@ export function AiWorkspace() {
         }}/>
         <button type="button" aria-label="发送" disabled={busy || !input.trim()} onClick={() => void send()}>➤</button>
       </div>
-      <small>Enter 发送 · Shift + Enter 换行 · 模型回答可能不准确</small>
     </footer>
   </main>;
 }

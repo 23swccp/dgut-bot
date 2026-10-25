@@ -56,7 +56,7 @@ export function CoursewareExportFilters({ courses, locked, options, onChange, on
   }
 
   return <section className="cw-filters" aria-label="导出内容筛选">
-    <div className="cw-filter-heading"><div><h3>导出内容</h3><p>先选范围和类型，再按需勾选章节；默认导出全部。</p></div></div>
+    <div className="cw-filter-heading"><h3>导出内容</h3></div>
     <fieldset disabled={locked || loading} className="cw-filter-row"><legend>资料范围</legend>
       {exportSources.map(item => <label key={item.id}><input type="checkbox" checked={options.sources.includes(item.id)}
         onChange={event => toggle("sources", item.id, event.target.checked)} />{item.label}</label>)}
@@ -65,9 +65,8 @@ export function CoursewareExportFilters({ courses, locked, options, onChange, on
       {exportKinds.map(item => <label key={item.id}><input type="checkbox" checked={options.kinds.includes(item.id)}
         onChange={event => toggle("kinds", item.id, event.target.checked)} />{item.label}</label>)}
     </fieldset>
-    <p className="cw-filter-note">文档包含 PDF、Word、PPT、表格等；其他附件包含压缩包及未识别格式。关闭正文后只生成所选附件的索引页。</p>
     {(!options.sources.length || !options.kinds.length) && <p className="cw-alert" role="alert">请至少选择一项资料范围和一项正文或附件类型。</p>}
-    <div className="cw-catalog-head"><div><strong>章节与作业</strong><p>读取所选课程的目录后，可只导出指定章节或作业。</p></div>
+    <div className="cw-catalog-head"><strong>章节与作业</strong>
       <button type="button" className="secondary" disabled={locked || loading || !courses.length} onClick={() => void readCatalog()}>
         {loading ? "正在读取目录…" : catalog ? "重新读取目录" : "读取目录并选择"}
       </button>

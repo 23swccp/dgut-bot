@@ -622,26 +622,26 @@ function App() {
           animate={{ width: 260, x: 0, opacity: 1 }}
           exit={reduceMotion ? { width: 0 } : { width: 0, x: -18, opacity: 0 }}
           transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div><p>模块</p>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
+        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
       {page === "terminal" && <SignUnavailablePage />}
       {page === "learning" && <section className="terminal learning-terminal">
         <div className="learning-flow" aria-label="未完成课件">
           <div className="lesson-scan-head"><div className="lesson-scan-summary"><strong>未完成课件</strong><span>
-            {courseScan.state === "scanning" ? `正在扫描 ${courseScan.scannedCourses} / ${courseScan.totalCourses} 门课程，已列出 ${courseScan.unfinishedCount} 个课件 · 可直接打开，旧结果逐课更新` :
-              courseScan.state === "auth_required" ? "等待登录" : `共 ${courseScan.unfinishedCount} 个${courseScan.fromCache ? " · 已显示 5 分钟内缓存" : ""}`}
+            {courseScan.state === "scanning" ? `扫描中 ${courseScan.scannedCourses} / ${courseScan.totalCourses}` :
+              courseScan.state === "auth_required" ? "等待登录" : `共 ${courseScan.unfinishedCount} 个`}
           </span></div><div className="lesson-scan-actions">
             {courseScan.state === "scanning" ? <button className="secondary compact" onClick={() => void cancelCourseScan()}>取消</button> : <button className="secondary compact" disabled={courseScan.stopping} onClick={() => void refreshCourseScan(true)}>{courseScan.stopping ? "正在停止…" : "重新扫描"}</button>}
             {courseScan.state !== "scanning" && courseScan.failures.length > 0 && <button className="secondary compact" disabled={courseScan.stopping} onClick={() => void refreshCourseScan(false)}>重试失败课程</button>}
             <button className="secondary compact learning-exit-button" disabled={!learningActive || exitingLearning} onClick={() => void exitCourseLearning()}>{exitingLearning ? "退出中…" : "退出刷课"}</button>
           </div></div>
           {courseScan.state === "auth_required" ? <div className="lesson-scan-message warning">登录状态不可用。请在程序浏览器中完成登录，再点击“重新扫描”。</div> : <>
-            <div className="learning-search-line"><i aria-hidden="true">›</i><input className="lesson-search" aria-label="搜索未完成课件" value={lessonQuery} onChange={event => setLessonQuery(event.target.value)} onKeyDown={handleLessonKeyDown} placeholder="搜索课程；↑↓ 选择；Enter 确认…" /></div>
+            <div className="learning-search-line"><i aria-hidden="true">›</i><input className="lesson-search" aria-label="搜索未完成课件" value={lessonQuery} onChange={event => setLessonQuery(event.target.value)} onKeyDown={handleLessonKeyDown} placeholder="搜索课程或课件" /></div>
             {courseScan.openPhase !== "idle" && <div className={`lesson-open-phase ${courseScan.openError ? "warning" : ""}`} role="status"><strong>{openPhaseLabel(courseScan.openPhase)}</strong>{courseScan.openError && <span>{courseScan.openError}</span>}{["failed", "timeout"].includes(courseScan.openPhase) && selectedLesson && <button className="secondary compact" onClick={() => void openScannedLesson(selectedLesson)}>重试打开</button>}</div>}
             <div className="lesson-groups" role="listbox" aria-label="未完成课件列表">
-              {courseScan.state === "scanning" && !courseScan.groups.length && <div className="lesson-scan-message">正在通过学校页面读取课程目录…</div>}
-              {courseScan.state !== "scanning" && !filteredLessonGroups.length && <div className="lesson-scan-message">{courseScan.state === "error" ? (courseScan.error || "课程目录读取失败") : courseScan.unfinishedCount === 0 ? "没有发现未完成课件，或当前课程响应尚未提供可解析目录。" : "没有匹配的课件。"}</div>}
+              {courseScan.state === "scanning" && !courseScan.groups.length && <div className="lesson-scan-message">正在读取课件…</div>}
+              {courseScan.state !== "scanning" && !filteredLessonGroups.length && <div className="lesson-scan-message">{courseScan.state === "error" ? (courseScan.error || "课程目录读取失败") : courseScan.unfinishedCount === 0 ? "没有未完成课件。" : "没有匹配的课件。"}</div>}
               {filteredLessonGroups.map(group => <section className="lesson-group" key={group.courseId}>
                 <h3><strong>{group.courseName}</strong><span>{group.items.length} 个章节</span></h3>
                 <div className="lesson-children">{group.items.map(item => {
@@ -656,7 +656,7 @@ function App() {
                       <header><i aria-hidden="true"/><strong>运行记录</strong></header>
                       <div className="course-event-log" ref={learningLogRef} onScroll={handleLearningScroll}>
                         {displayedCourseEvents.length === 0 && learningLogs.length === 0 && <div className="event-empty">正在等待运行事件…</div>}
-                        {displayedCourseEvents.map(event => <div className={`course-event ${event.level}`} key={event.seq}><time>{formatClock(event.time)}</time><span>{event.message}</span><code>{event.code}</code></div>)}
+                        {displayedCourseEvents.map(event => <div className={`course-event ${event.level}`} key={event.seq}><time>{formatClock(event.time)}</time><span>{event.message}</span></div>)}
                         {learningLogs.map((line, logIndex) => <div className="course-local-log" key={`${logIndex}-${line}`}>{line}</div>)}
                         <span ref={learningEndRef}/>
                       </div>
@@ -675,9 +675,9 @@ function App() {
       {page === "courseware" && <CoursewareExportPanel courses={courseChoices} onRefresh={refreshExportCourses} />}
       {page === "settings" && <SettingsSection className="utility-settings" title="设置">
         <div className="settings-surface">
-        <Card title="课堂活动监测" desc="签到成功后继续检查；发现选人会退出课程，活动或课堂结束后恢复原班级。重新加入可能需要教师审核。">
+        <Card title="课堂活动监测" desc="选人时自动退课，结束后恢复；重新加入可能需教师审核。">
           <div className="setting-line"><span>签到后监测选人并自动退课／加回</span><button type="button" role="switch" aria-checked={selectionAutoLeave} aria-label="签到后监测选人并自动退课加回" disabled={busy || signStatus.running || Boolean(signStatus.recoveryPending)} className={`switch ${selectionAutoLeave ? "on" : ""}`} onClick={() => void saveSettings({ selection_auto_leave: !selectionAutoLeave }, "课堂活动监测设置已保存")}><i /></button></div>
-          <p>{signStatus.running || signStatus.recoveryPending ? "请先停止监测并恢复原班级，再修改此设置。" : "修改后自动保存，下次启动继续使用。"}</p>
+          {(signStatus.running || signStatus.recoveryPending) && <p>请先停止监测并恢复原班级，再修改此设置。</p>}
         </Card>
         <Card title="启动浏览器"><div className="browser-scan-line"><button type="button" className={`refresh-button ${detectingBrowsers ? "spinning" : ""}`} aria-label={detectingBrowsers ? "正在重新检测浏览器" : "重新检测浏览器"} title={detectingBrowsers ? "检测中…" : "重新检测"} disabled={detectingBrowsers} onClick={detectInstalledBrowsers}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1 .1-6.1L20 11"/></svg></button></div><div className="browser-list">{detectedBrowsers.map(option => { const selected = browser !== "自定义浏览器" && samePath(path, option.path); return <button type="button" key={option.path} className={`browser-option ${selected ? "selected" : ""}`} onClick={() => chooseDetectedBrowser(option)}><i className="radio-dot"/><strong>{option.name}</strong></button>; })}<button type="button" className={`browser-option ${browser === "自定义浏览器" ? "selected" : ""}`} onClick={chooseCustomBrowser}><i className="radio-dot"/><strong>自定义路径</strong></button></div>{browser === "自定义浏览器" && <label className="custom-browser-path"><span>程序路径</span><input className="field" value={path} onChange={event => setPath(event.target.value)}/></label>}</Card>
         <Card title="校园网"><div className="setting-line"><span>开机时打开校园网登录页</span><button type="button" aria-label="开机时打开校园网登录页" onClick={() => setCampusLoginOnStartup(!campusLoginOnStartup)} className={`switch ${campusLoginOnStartup ? "on" : ""}`}><i /></button></div></Card>

@@ -47,6 +47,5 @@ export function SignChoicePicker({ label, items, total, cursor, busy, onCursor, 
         <SignChoiceBody item={item} />
       </button>) : <div className="course-empty">暂无可选项，请刷新或换个关键词。</div>}
     </div>
-    <div className="course-picker-help">↑↓ 移动　Enter 选择　Esc 清空搜索</div>
   </>;
 }

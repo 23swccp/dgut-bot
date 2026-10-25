@@ -24,7 +24,6 @@ function logClock(value: string): string {
 export function LogPanel({ call }: { call: Caller }) {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [latestSeq, setLatestSeq] = useState(0);
-  const [bufferSize, setBufferSize] = useState(0);
   const [follow, setFollow] = useState(true);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -43,7 +42,6 @@ export function LogPanel({ call }: { call: Caller }) {
     if (!result.ok) { setMessage(String(result.error || "日志读取失败")); return; }
     setEvents((result.logEvents as LogEvent[]) || []);
     setLatestSeq(Number(result.latestSeq) || 0);
-    setBufferSize(Number(result.bufferSize) || 0);
     setMessage("");
     autoScrollRef.current = true;
   }, []);
@@ -59,7 +57,6 @@ export function LogPanel({ call }: { call: Caller }) {
       if (disposed || !result.ok) return;
       const incoming = (result.logEvents as LogEvent[]) || [];
       setLatestSeq(current => Math.max(current, Number(result.latestSeq) || 0));
-      setBufferSize(Number(result.bufferSize) || 0);
       if (incoming.length) setEvents(items => [...items, ...incoming].slice(-1600));
     }, 1500);
     return () => { disposed = true; window.clearInterval(timer); };
@@ -95,7 +92,7 @@ export function LogPanel({ call }: { call: Caller }) {
           <button type="button" className="primary compact" disabled={exporting} onClick={() => void exportReport()}>{exporting ? "导出中…" : "导出日志"}</button>
         </div>
         <p className="log-summary">
-          共 {events.length} 条 · 缓冲 {bufferSize} 条{report ? ` · 已导出 ${report.count} 条` : ""}
+          共 {events.length} 条{report ? ` · 已导出 ${report.count} 条` : ""}
           {message && <span className="log-error"> · {message}</span>}
           {report && <button type="button" className="link-button" onClick={() => void openReport()}>打开导出文件</button>}
           {report && <code className="log-report-path">{report.path}</code>}
