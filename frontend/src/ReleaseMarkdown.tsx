@@ -4,8 +4,10 @@ import remarkGithub from "remark-github";
 import remarkBreaks from "remark-breaks";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
+import { MarkdownCodeBlock } from "./MarkdownCodeBlock";
 
 const components: Components = {
+  pre: MarkdownCodeBlock,
   a: ({ node: _node, href, children, ...props }) => {
     if (!href) return <span>{children}</span>;
     const external = !href.startsWith("#");

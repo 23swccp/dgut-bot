@@ -1,0 +1,33 @@
+.mermaid-diagram {
+  margin: 18px 0;
+  padding: 16px;
+  min-width: 0;
+  border: 1px solid #e2e7e4;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mermaid-diagram-svg {
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid-diagram-svg > svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.mermaid-diagram details { margin-top: 12px; }
+.mermaid-diagram summary { cursor: pointer; color: #68756e; font-size: 12px; }
+.mermaid-diagram [role="alert"] { color: #a63838; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mermaid-diagram pre { text-align: left; }
+
+.mermaid-render-target {
+  position: absolute;
+  left: -100000px;
+  top: 0;
+  width: 1200px;
+  pointer-events: none;
+}

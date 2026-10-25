@@ -2,6 +2,7 @@ import { isValidElement, type ReactNode, useEffect, useMemo, useState } from "re
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import guideSource from "../../README.md?raw";
+import { MarkdownCodeBlock } from "./MarkdownCodeBlock";
 
 type AboutGuideProps = {
   version: string;
@@ -88,6 +89,7 @@ function LinkedHeading({ level, children }: { level: 2 | 3; children: ReactNode 
 }
 
 const markdownComponents: Components = {
+  pre: MarkdownCodeBlock,
   h2: ({ children }) => <LinkedHeading level={2}>{children}</LinkedHeading>,
   h3: ({ children }) => <LinkedHeading level={3}>{children}</LinkedHeading>,
   a: ({ href = "", children }) => {

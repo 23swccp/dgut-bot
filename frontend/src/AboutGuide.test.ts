@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { markdownForApp } from "./AboutGuide";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AboutGuide, markdownForApp } from "./AboutGuide";
 
 describe("markdownForApp", () => {
+  it("routes the README flowchart through the shared Mermaid renderer", () => {
+    const html = renderToStaticMarkup(createElement(AboutGuide, { version: "0.3.16", repo: "23swccp/dgut-bot" }));
+    expect(html).toContain('<figure class="mermaid-diagram">');
+    expect(html).toContain("小皮卡反代优学院 AI");
+    expect(html).toContain('src="./docs/course-page.png"');
+    expect(html).not.toContain("<pre><figure");
+  });
   it("restores the app header while GitHub keeps its centered HTML header", () => {
     const githubHeader = `before
 <!-- github-readme-header:start -->
