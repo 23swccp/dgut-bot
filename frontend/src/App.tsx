@@ -445,7 +445,14 @@ function App() {
   }
   async function initializeSignIn() {
     setBusy(true);
-    append("正在打开优学院，程序将读取浏览器当前登录状态…");
+    append("正在恢复登录状态…");
+    const restored = await call("load_session_and_courses", { automatic: true, waitSeconds: 1 });
+    acceptLoginStatus(restored.login);
+    if (restored.ok && restored.courses?.length) {
+      setCourses(restored.courses); setPhase("courses"); setBusy(false);
+      append("登录状态已恢复，请选择课程。");
+      return;
+    }
     setPhase("login");
     const opened = await call("start_browser", loginPayload);
     append(opened.ok ? "学校页面已准备好。如未登录，请在浏览器中完成登录，程序将自动继续。" : `启动浏览器失败：${opened.error || "未知错误"}`);
