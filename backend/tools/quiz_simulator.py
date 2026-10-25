@@ -112,6 +112,58 @@ def run_slide_fixture(backend, debug_port, web_port, cross_origin):
         conn.ws.close()
 
 
+def run_quiz_navigation_handoff(backend: StandaloneBackend) -> bool:
+    """合成已判卷页面：保留答题占用跨过稳定窗口，验证就绪通知不会提前耗尽。"""
+    try:
+        backend.evaluate("""(() => {
+          window.setupTimedSkipFixture();
+          document.querySelector('.limit-time-mask').hidden = true;
+          document.querySelectorAll('.question-wrapper').forEach(q => q.classList.add('finished'));
+          const currentPage = window.koLearnCourseViewModel.currentPage;
+          window.koLearnCourseViewModel.currentPage = () => ({...currentPage(), record: () => ({status: () => true})});
+          window.__yxy_agent_waiting = true;
+          window.__handoff_events = [];
+          window.__handoff_log = console.log;
+          console.log = function(...args) {
+            const text = args[0];
+            if (typeof text === 'string' && text.startsWith('[yxy:event] ')) {
+              window.__handoff_events.push(JSON.parse(text.slice('[yxy:event] '.length)).type);
+            }
+            window.__handoff_log.apply(console, args);
+          };
+        })()""")
+        config = CourseConfig(quiz_auto_answer=True, quiz_mode="ai", document_scroll_enabled=False, anti_idle_scroll=False)
+        backend.evaluate('window.__YXY_CONFIG__=' + config.to_js() + ';' + INJECT_JS)
+        time.sleep(4.5)  # 跨过 2.5 秒稳定窗口以及后续 tick，不能靠碰巧快速返回通过。
+        before = backend.evaluate('window.__handoff_events')
+        assert 'next-ready' not in before and 'static-ready' not in before, ('before-release', before)
+        assert backend.evaluate('window.__yxy_controller.get_navigation_target()') is None
+        backend.evaluate('window.__yxy_agent_waiting = false')
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            events = backend.evaluate('window.__handoff_events')
+            if 'next-ready' in events and 'static-ready' in events:
+                break
+            time.sleep(0.1)
+        assert events.count('next-ready') == 1 and events.count('static-ready') == 1, ('after-release', events)
+        target = backend.evaluate('window.__yxy_controller.get_navigation_target()')
+        assert target and backend.click(target['x'], target['y']), target
+        state = backend.evaluate('window.__yxy_controller.get_page_state()')
+        assert state['page'] == 'next-page' and backend.evaluate('window.skipFixtureStats.next') == 1, state
+        print('通过 | 测验释放交接 | 忙碌时不消费就绪通知，释放后可信翻页一次')
+        return True
+    except Exception as error:
+        print(f'失败 | 测验释放交接 | {error}')
+        return False
+    finally:
+        backend.evaluate("""(() => {
+          window.__yxy_controller && window.__yxy_controller.cleanup();
+          window.__yxy_agent_waiting = false;
+          if (window.__handoff_log) console.log = window.__handoff_log;
+          window.cleanupTimedSkipFixture && window.cleanupTimedSkipFixture();
+        })()""")
+
+
 class QuietHandler(SimpleHTTPRequestHandler):
     def handle(self):
         try:
@@ -230,6 +282,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="启动本地模拟测验并用真实浏览器事件验证自动答题")
     parser.add_argument("--show", action="store_true", help="显示测试浏览器窗口")
     parser.add_argument("--hold", type=float, default=15.0, help="--show 时测试结束后保留窗口的秒数")
+    parser.add_argument("--navigation-only", action="store_true", help="只运行隔离的测验完成与翻页交接回归")
     args = parser.parse_args()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(SIMULATOR_ROOT)))
@@ -282,6 +335,9 @@ def main() -> int:
                 tab_keyword="/learnCourse.html",
             )
             wait_for_simulator_page(backend)
+
+            if args.navigation_only:
+                return 0 if run_quiz_navigation_handoff(backend) else 1
 
             cases = [
                 ("总开关关闭", False, True, True, True, False),
