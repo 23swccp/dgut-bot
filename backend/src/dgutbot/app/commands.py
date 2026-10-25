@@ -24,6 +24,7 @@ from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
 from dgutbot.experimental.ulearning_ai_browser import discover_browser_access, discover_session_access
 from dgutbot.course.ai_quiz import UlearningAiAnswerProvider
+from dgutbot.experimental.ai_router import AiRouter
 from version import APP_NAME, APP_VERSION, GITHUB_REPO
 
 
@@ -434,12 +435,16 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "ai_chat":
         try:
             model_id = int(payload.get("modelId", backend.config.course_ai_model_id))
-            reply = AI_BRIDGE.complete(payload.get("messages"), model_id=model_id)
+            routed = AiRouter(AI_BRIDGE, lambda text, kind: emit(text, kind, module="app")).complete(
+                payload.get("messages"), model_id=model_id,
+            )
+            reply = routed.reply
             return {
                 "ok": True,
                 "answer": reply.text,
                 "reasoning": reply.reasoning,
                 "upstreamToolCallCount": len(reply.upstream_tool_calls),
+                "modelId": routed.model_id, "modelName": routed.model_name,
             }
         except (ValueError, UlearningAiError) as error:
             return {"ok": False, "error": str(error)}
@@ -511,7 +516,7 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "start_course_helper":
         if backend.config.course_quiz_auto_answer:
             try:
-                AI_BRIDGE.probe(backend.config.course_ai_model_id)
+                AI_BRIDGE.probe()
             except UlearningAiError:
                 return {"ok": False, "error": "未找到可用的当前登录会话、课程 AI 或所选模型；请先从浏览器登录并读取课程。"}
             provider = UlearningAiAnswerProvider(

@@ -155,7 +155,7 @@ def build_registry(backend: Any, *, instance_id: str = "", services=None) -> Too
             {"courseId": {"type": "string", "minLength": 1, "maxLength": 128}}, ["courseId"], select_course, read_only=False)
         add("course.start", "Start automation in the already-open course page and return a task immediately.", {
             "rate": {"type": "number", "minimum": 1, "maximum": 16, "default": 8},
-            "quizMode": {"type": "string", "enum": ["disabled", "fixed", "agent"], "default": "agent"},
+            "quizMode": {"type": "string", "enum": ["disabled", "agent"], "default": "agent"},
             "quizRequestTimeoutMs": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 600000},
         }, [], services.start_course, read_only=False, behavior="creates_task")
         add("course.stop", "Stop course automation without closing the service or browser.", {}, [], lambda p: services.stop_course(), read_only=False)

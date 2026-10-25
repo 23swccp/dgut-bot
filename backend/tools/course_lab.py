@@ -16,6 +16,7 @@ import time
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
@@ -26,7 +27,8 @@ sys.path.insert(0, str(ROOT))
 
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
          "stale_page", "stale_structure", "unsupported", "expired", "occluded", "prefilled",
-         "multi_blank", "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
+         "multi_blank", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable",
+         "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
 
 
 def check(condition, detail):
@@ -38,7 +40,7 @@ def fixture(seed, case):
     """站点题库/答案不依赖生产选择器或读取器；只把公开题干交给浏览器。"""
     rng = random.Random(seed)
     pages, expected = [], {}
-    for index in range(2 if case == "roundtrip" else 1):
+    for index in range(2 if case in {"roundtrip", "ai_roundtrip"} else 1):
         page_id = f"page-{seed}-{index}"
         a, b = rng.randrange(10, 80), rng.randrange(10, 80)
         options = [a + b, a + b + 1, a + b - 1, a + b + 10]
@@ -61,10 +63,15 @@ def fixture(seed, case):
         expected[page_id] = {questions[0]["id"]: [opts[options.index(a + b)]["id"]],
                              questions[1]["id"]: truth, questions[2]["id"]: blank_values}
         if case == "unsupported":
+            questions[0]["type"] = "essay"
+            questions[0]["sourceType"] = "简答题"
+        if case in {"multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route"}:
             questions[0]["type"] = "multiple_choice"
             questions[0]["sourceType"] = "多选题"
+            questions[0]["prompt"] = f"选出不小于 {a + b} 的数"
+            expected[page_id][questions[0]["id"]] = [opt["id"] for opt in opts if int(opt["text"]) >= a + b]
         pages.append({"id": page_id, "questions": questions})
-    return {"pages": pages, "document": case == "document", "timed": case == "timed", "long": case == "long_narrow", "slow": case == "slow_render",
+    return {"pages": pages, "document": case == "document", "timed": case in {"timed", "ai_timed"}, "long": case == "long_narrow", "slow": case == "slow_render",
             "prefilled": case == "prefilled"}, expected
 
 
@@ -75,6 +82,9 @@ def solve(request):
         if q["type"] in {"single_choice", "unsupported"}:
             a, b = map(int, re.search(r"(\d+) \+ (\d+)", q["prompt"]).groups())
             value = [next(o["id"] for o in q["options"] if int(o["text"]) == a + b)]
+        elif q["type"] == "multiple_choice":
+            minimum = int(re.search(r"不小于 (\d+)", q["prompt"]).group(1))
+            value = [o["id"] for o in q["options"] if int(o["text"]) >= minimum]
         elif q["type"] == "true_false":
             a, b = map(int, re.search(r"(\d+) < (\d+)", q["prompt"]).groups())
             value = a < b
@@ -249,6 +259,12 @@ class Lab:
                  "height": 720 if case == "long_narrow" else 900, "deviceScaleFactor": 1, "mobile": False})
         self.cdp("Page.navigate", {"url": self.site_url + "/agent-course.html?run=" + run_id})
         wait_until(lambda: self.evaluate("window.labReady === true && new URLSearchParams(location.search).get('run') === " + json.dumps(run_id)), bool)
+        if case != "document":
+            from dgutbot.course.yxy_quiz import QUIZ_STATE_JS
+            initial_quiz = json.loads(self.evaluate(QUIZ_STATE_JS))
+            check(initial_quiz.get("pageId") == public["pages"][0]["id"], "未启动控制器时不能读取平台页标识")
+        if case.startswith("ai_"):
+            return self.run_ai(case, seed, public, record)
         task = self.cli("course.start", {"quizMode": "agent", "rate": 1,
                         "quizRequestTimeoutMs": 3000 if case == "expired" else 60000, "idempotencyKey": uuid4().hex})
         task_id = task["taskId"]
@@ -325,7 +341,7 @@ class Lab:
                 break
             check(result["state"] == "completed" and result["result"] == {"completedCount": 3, "submitAttempts": 1}, result)
             check(len(record["submissions"]) == index + 1 and all(s["accepted"] for s in record["submissions"]), record["submissions"])
-        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "graded_wrong"}:
+        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "multiple_choice", "graded_wrong"}:
             final_task = wait_until(lambda: self.task(task_id), lambda t: t["state"] in {"completed", "failed", "cancelled"})
             check(final_task["state"] == "completed", final_task)
         browser_result = self.evaluate("window.labSnapshot()")
@@ -338,6 +354,59 @@ class Lab:
             check(browser_result["lockedInputs"] == 2 and browser_result["wrongResults"] == 2, browser_result)
             check(record["submissions"] and record["submissions"][0]["accepted"] and not record["submissions"][0]["correct"], record["submissions"])
         return {"case": case, "seed": seed, "passed": True, "browser": browser_result, "submissions": record["submissions"]}
+
+    def run_ai(self, case: str, seed: int, public: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+        """合成 AI 仅替换上游返回；取题、提示词、校验和浏览器输入使用生产代码。"""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from dgutbot.experimental.ulearning_ai import AiModel, UlearningAiError
+
+        calls = []
+
+        def complete(messages, **kwargs):
+            envelope = json.loads(messages[0]["content"].split("INPUT_JSON=", 1)[1])
+            check(all("id" not in q and "answerFormat" in q for q in envelope["questions"]), "AI 请求泄漏题号或缺少答案约束")
+            snapshot = self.evaluate("window.labSnapshot()")
+            check(snapshot["starts"] == int(case == "ai_timed"), "AI 请求发生在限时测验开始前")
+            calls.append(envelope["requestId"])
+            if case == "ai_unavailable":
+                raise UlearningAiError("synthetic AI unavailable")
+            if case == "ai_route":
+                if kwargs.get("model_id") == 2:
+                    raise UlearningAiError("doubao每日token数或联网搜索次数已用完")
+                check(kwargs.get("model_id") == 6, "未切换到本地后备模型")
+            if case == "ai_repair" and len(calls) == 1:
+                return SimpleNamespace(text="invalid-json", upstream_tool_calls=())
+            questions = [{**q, "id": str(q["index"])} for q in envelope["questions"]]
+            values = [a["value"] for a in solve({"questions": questions, "requestId": "synthetic", "revision": 1})["answers"]]
+            return SimpleNamespace(text=json.dumps({"requestId": envelope["requestId"], "answers": values}), upstream_tool_calls=())
+
+        bridge = SimpleNamespace(probe=lambda *_args: None, complete=complete,
+                                 models=lambda: (AiModel(2, "合成豆包"), AiModel(6, "合成本地版"))
+                                 if case in {"ai_route", "ai_unavailable"} else (AiModel(1, "合成 AI"),))
+        config = self.commands.backend.config
+        with patch.object(self.commands, "AI_BRIDGE", bridge), \
+             patch.object(config, "course_quiz_auto_answer", True), \
+             patch.object(config, "course_ai_model_id", 2 if case in {"ai_route", "ai_unavailable"} else 1), \
+             patch.object(self.commands.backend, "save_config", lambda: None):
+            result = self.commands.handle("start_course_helper", {})
+            check(result["ok"], result)
+            controller = self.commands.backend.course_controller
+            status = wait_until(controller.status_snapshot, lambda s: s["completed"] or not s["running"], timeout=60)
+            check(not status["completed"] if case == "ai_unavailable" else status["completed"], status)
+            wait_until(lambda: controller._quiz_busy, lambda busy: not busy)
+        browser_result = self.evaluate("window.labSnapshot()")
+        if case == "ai_unavailable":
+            check(len(calls) == 2 and not record["submissions"], "全部模型失败后不应提交")
+            check(all(browser_result[key] == 0 for key in ("clicks", "inputs", "submits", "starts", "next")), browser_result)
+            return {"case": case, "seed": seed, "passed": True, "aiCalls": len(calls), "browser": browser_result, "submissions": []}
+        count = len(public["pages"])
+        check(len(record["submissions"]) == count and all(s["accepted"] for s in record["submissions"]), record["submissions"])
+        check(len(calls) == count + int(case in {"ai_repair", "ai_route"}), calls)
+        check(browser_result["submits"] == count and browser_result["untrusted"] == 0, browser_result)
+        check(browser_result["starts"] == int(case == "ai_timed"), browser_result)
+        check(browser_result["next"] == count - 1, browser_result)
+        return {"case": case, "seed": seed, "passed": True, "aiCalls": len(calls), "browser": browser_result, "submissions": record["submissions"]}
 
     def close(self):
         for record in self.runs.values():

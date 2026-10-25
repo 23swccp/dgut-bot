@@ -883,18 +883,19 @@ class CourseConfig:
     document_scroll_enabled: bool = True
     document_scroll_interval: float = 3.0
     document_scroll_speed: float = 3.0
-    # 测验自动作答：选择题点 C、判断题点"错误"、每空填英文逗号。
+    # 测验只接受 AI/Agent 校验后的答案，不生成占位答案。
     quiz_auto_answer: bool = True
-    quiz_mode: str = "fixed"
+    quiz_mode: str = "ai"
     quiz_choice_enabled: bool = True
     quiz_judgment_enabled: bool = True
     quiz_blank_enabled: bool = True
-    quiz_option_label: str = "C"
-    quiz_judgment_label: str = "错误"
-    quiz_blank_text: str = ","
     # 防走神：定期用滚轮下滑再上滑（真实 wheel 事件），重置平台挂机计时。
     anti_idle_scroll: bool = True
     anti_idle_interval: float = 90.0
+
+    def __post_init__(self) -> None:
+        if self.quiz_mode not in {"ai", "agent", "disabled"}:
+            raise ValueError(f"不支持的测验作答模式：{self.quiz_mode}")
 
     def to_js(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -2468,96 +2469,46 @@ class CourseController:
     def _run_quiz_handler(self) -> None:
         config = self._active_config
         quiz_session = self._session_id
+        label = "Agent" if config and config.quiz_mode == "agent" else "AI"
         try:
-            if not config or not config.quiz_auto_answer or config.quiz_mode == 'disabled':
+            if not config or not config.quiz_auto_answer or config.quiz_mode == "disabled":
                 return
-            if config and config.quiz_mode in {"agent", "ai"}:
-                provider = self._agent_answer_provider if config.quiz_mode == "agent" else self._ai_answer_provider
-                if provider is None:
-                    self.stop()
-                    return
-                self.eval_js("window.__yxy_agent_waiting = true")
-                handler = QuizHandler(
-                    evaluate=self.eval_js, click=self.action_executor.execute_click,
-                    type_text=self.action_executor.insert_text, is_running=lambda: self._running,
-                    log=lambda *_args: None, dry_run=False, jitter=0,
-                    start_attempts=self._quiz_start_attempts,
-                    dialog_attempts=self._dialog_attempts,
-                    auto_dismiss_dialog=config.auto_dismiss_dialog,
-                )
-                result = provider.answer(handler, self) if config.quiz_mode == "agent" else provider.answer(handler, self, config)
-                if result["state"] == "fallback":
-                    self.emit(f"[刷课] AI 答题失败，改用固定答案：{result['reason']}。", "warn")
-                else:
-                    if result["state"] != "completed":
-                        if self._session_id == quiz_session:
-                            self.stop()
-                    else:
-                        self._last_progress_at = time.monotonic()
-                        completed = int((result.get("result") or {}).get("completedCount") or 0)
-                        self._emit_event(
-                            "QUIZ_SUBMITTED", "success", "quiz",
-                            f"AI 测验已提交：完成 {completed} 题",
-                            state=(self._last_status or {}).get("state"),
-                            data={"completed": completed, "skipped": 0, "failed": 0},
-                        )
-                    return
-            fixed_attempts = 1 if config and config.quiz_mode == "ai" else 2
-            for attempt in range(fixed_attempts):
-                handler = QuizHandler(
-                    evaluate=self.eval_js,
-                    click=self.action_executor.execute_click,
-                    type_text=self.action_executor.insert_text,
-                    is_running=lambda: self._running,
-                    log=lambda text, kind="info": self.emit(text, kind),
-                    dry_run=False,
-                    start_attempts=self._quiz_start_attempts,
-                    dialog_attempts=self._dialog_attempts,
-                    auto_dismiss_dialog=config.auto_dismiss_dialog if config else True,
-                )
-                summary = handler.answer_all(
-                    option_label=config.quiz_option_label if config else "C",
-                    judgment_label=config.quiz_judgment_label if config else "错误",
-                    blank_text=config.quiz_blank_text if config else ",",
-                    answer_choice=config.quiz_choice_enabled if config else True,
-                    answer_judgment=config.quiz_judgment_enabled if config else True,
-                    answer_blank=config.quiz_blank_enabled if config else True,
-                )
-                if not self._running:
-                    return
-                self.emit(
-                    f"[刷课] 测验处理结束：作答 {summary['done']}，跳过 {summary['skipped']}，"
-                    f"失败 {summary['failed']}，处理弹窗 {summary['modals']} 次。",
-                    "success" if summary["failed"] == 0 else "warn",
-                )
-                if summary["done"] or summary["skipped"] or summary["failed"]:
-                    self._emit_event(
-                        "QUIZ_SUBMITTED", "success" if summary["failed"] == 0 else "warning", "quiz",
-                        f"测验已提交：完成 {summary['done']}，跳过 {summary['skipped']}",
-                        state=(self._last_status or {}).get("state"),
-                        data={"completed": summary["done"], "skipped": summary["skipped"], "failed": summary["failed"]},
-                    )
-                if summary["failed"] == 0:
-                    break
-                if config and config.quiz_mode == "ai":
-                    self.emit("[刷课] 固定答案降级执行失败，已停止课程任务，请人工检查当前页。", "warn")
-                    if self._session_id == quiz_session:
-                        self.stop()
-                    return
-                if attempt == 0:
-                    self.emit("[刷课] 存在失败题目，30 秒后自动重试一轮。", "warn")
-                    self._stop_event.wait(30.0)
+            provider = self._agent_answer_provider if config.quiz_mode == "agent" else self._ai_answer_provider
+            if provider is None:
+                raise RuntimeError(f"{label} 测验答题服务未连接，请重新启动任务。")
+            self.eval_js("window.__yxy_agent_waiting = true")
+            handler = QuizHandler(
+                evaluate=self.eval_js, click=self.action_executor.execute_click,
+                type_text=self.action_executor.insert_text,
+                is_running=lambda: self._running and self._session_id == quiz_session,
+                log=lambda *_args: None, dry_run=False, jitter=0,
+                start_attempts=self._quiz_start_attempts,
+                dialog_attempts=self._dialog_attempts,
+                auto_dismiss_dialog=config.auto_dismiss_dialog,
+            )
+            result = provider.answer(handler, self) if config.quiz_mode == "agent" else provider.answer(handler, self, config)
+            if self._session_id != quiz_session or not self._running:
+                return
+            if result["state"] != "completed":
+                reason = result.get("reason") or (result.get("error") or {}).get("message") or "当前测验未完成"
+                self.emit(f"[刷课] {reason}，已停止课程任务，请人工检查。", "warn")
+                self.stop()
+                return
+            self._last_progress_at = time.monotonic()
+            completed = int((result.get("result") or {}).get("completedCount") or 0)
+            self._emit_event(
+                "QUIZ_SUBMITTED", "success", "quiz",
+                f"{label} 测验已提交：完成 {completed} 题",
+                state=(self._last_status or {}).get("state"),
+                data={"completed": completed, "skipped": 0, "failed": 0},
+            )
         except Exception as error:
-            if config and config.quiz_mode in {"agent", "ai"}:
-                label = "Agent" if config.quiz_mode == "agent" else "AI"
-                self.emit(f"[刷课] {label} 测验处理失败，已停止课程任务。", "warn")
-                if self._session_id == quiz_session:
-                    self.stop()
-            else:
-                self.emit(f"[刷课] 测验自动作答异常停止：{error}", "warn")
+            self.emit(f"[刷课] {label} 测验处理失败：{error}", "warn")
+            if self._session_id == quiz_session:
+                self.stop()
         finally:
             if self._session_id == quiz_session:
-                if config and config.quiz_mode in {"agent", "ai"} and self._running:
+                if self._running:
                     self.eval_js("window.__yxy_agent_waiting = false")
                 self._quiz_busy = False
 
