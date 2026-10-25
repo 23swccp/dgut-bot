@@ -2,6 +2,7 @@
 browser_profile/
 config.json
 auth.json
+login-cache.json
 account.json
 independent_account.json
 course-recovery.json

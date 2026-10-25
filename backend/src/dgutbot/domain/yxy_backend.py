@@ -493,7 +493,8 @@ class SignBackend:
         # 自动答题是一次性运行授权，不能从上一次程序会话继承。
         self.config.course_quiz_auto_answer = False
         self._migrate_legacy_log()
-        # 每次启动都重新读取浏览器登录；凭据与身份只保留在本次进程内存中。
+        # 缓存仅在登录读取时验证后恢复，不把磁盘数据直接当作已登录状态。
+        self._login_cache_path = self.root / "login-cache.json"
         self.token = ""
         self.user_id: int | None = None
         self.display_name = ""
@@ -1393,6 +1394,13 @@ class SignBackend:
 
     def _discard_credentials(self) -> None:
         """丢弃已被服务端或登录跳转拒绝的内存会话。"""
+        rejected = self.token or str(self.headers.get("Authorization") or "")
+        if rejected:
+            if self._load_login_cache().get("token") == rejected:
+                try:
+                    self._login_cache_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self.token = ""
         self.user_id = None
         self.display_name = ""
@@ -1532,6 +1540,7 @@ class SignBackend:
         if not self.courses:
             self._log("未读取到课程，请检查账号与网络状态。", "warn")
             return False
+        self._save_login_cache()
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         self.resume_course_recovery()
         self.homework_scan.refresh_archive()
@@ -1690,6 +1699,48 @@ class SignBackend:
         finally:
             ws.close()
 
+    def _load_login_cache(self) -> dict:
+        try:
+            saved = json.loads(self._login_cache_path.read_text(encoding="utf-8"))
+            if saved.get("token") and 0 <= time.time() - saved["saved_at"] < 24 * 60 * 60:
+                return saved
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        return {}
+
+    def _save_login_cache(self) -> None:
+        previous = self._load_login_cache()
+        saved = {
+            "token": self.token, "user_id": self.user_id,
+            "display_name": self.display_name, "account_name": self.account_name,
+            "saved_at": previous["saved_at"] if previous.get("token") == self.token else time.time(),
+        }
+        try:
+            self._login_cache_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as error:
+            self._log(f"保存登录缓存失败：{error}", "warn")
+
+    def _restore_browser_login(self, ws_url: str, token: str, user_id: int | None) -> None:
+        cookies = [
+            {"name": "AUTHORIZATION", "value": token, "httpOnly": True},
+            {"name": "token", "value": token, "httpOnly": False},
+        ]
+        if user_id is not None:
+            cookies.append({"name": "userid", "value": str(user_id), "httpOnly": False})
+        for cookie in cookies:
+            cookie.update(domain=".dgut.edu.cn", path="/", secure=True)
+        ws = create_connection(ws_url, timeout=10)
+        try:
+            ws.send(json.dumps({"id": 1, "method": "Storage.setCookies", "params": {"cookies": cookies}}))
+            while True:
+                value = json.loads(ws.recv())
+                if value.get("id") == 1:
+                    if value.get("error"):
+                        raise RuntimeError("浏览器拒绝恢复登录缓存")
+                    return
+        finally:
+            ws.close()
+
     def load_session_and_courses(self, wait_seconds: int = 20, automatic: bool = False) -> bool:
         if not automatic:
             self._log("正在连接浏览器远程调试端口…", "info")
@@ -1713,6 +1764,16 @@ class SignBackend:
             return False
         dgut = [item for item in cookies if "dgut.edu.cn" in item.get("domain", "")]
         candidate_token = self._browser_cookie(dgut, "AUTHORIZATION")
+        cached = self._load_login_cache()
+        from_cache = not candidate_token or (automatic and candidate_token == self._rejected_browser_token)
+        if from_cache and cached and cached["token"] != self._rejected_browser_token:
+            candidate_token = cached["token"]
+            try:
+                self._restore_browser_login(ws_url, candidate_token, cached.get("user_id"))
+            except Exception as error:
+                if not automatic:
+                    self._log(f"恢复浏览器登录缓存失败：{error}", "warn")
+                return False
         if not candidate_token:
             if not automatic:
                 self._log("未检测到有效登录状态，请在浏览器中完成优学院登录。", "warn")
@@ -1735,6 +1796,7 @@ class SignBackend:
                 if identity.get("code") == 1 and raw_id.isdigit() and int(raw_id) == pending["userId"]:
                     _, display_name, account_name = self._browser_identity(dgut)
                     self._apply_token(candidate_token, int(raw_id), display_name=display_name, account_name=account_name)
+                    self._save_login_cache()
                     self.courses = []
                     self._rejected_browser_token = ""
                     self._log("原账号身份已验证，正在继续恢复原班级。", "info")
@@ -1769,8 +1831,11 @@ class SignBackend:
             return False
         self.token = candidate_token
         self.user_id, self.display_name, self.account_name = self._browser_identity(dgut)
+        if cached and cached["token"] == candidate_token:
+            self.user_id, self.display_name, self.account_name = cached.get("user_id"), cached.get("display_name", ""), cached.get("account_name", "")
         self.courses = courses
         self._rejected_browser_token = ""
+        self._save_login_cache()
         self._log("登录信息验证成功，课程列表读取完成。", "success")
         self._log(f"已读取 {len(self.courses)} 门课程，请在下方选择。", "success")
         self.resume_course_recovery()
