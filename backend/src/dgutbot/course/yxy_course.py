@@ -349,6 +349,8 @@ INJECT_JS = r"""
   }
 
   function getNavigationTarget() {
+    // 作答与提交核对尚未交还控制权时，不消费一次性的 next-ready 通知。
+    if (quizBusy()) return null;
     if (quizStartPending() && !quizSkipBeforeStart()) return null;
     if (slideDocuments().some(item => !item.completed)) return null;
     if (!C.auto_next) return null;
@@ -774,7 +776,7 @@ INJECT_JS = r"""
       !hasDocument && (!hasDocumentFrame || currentContentType() === 5);
     const quizSettled = quizUnfinished < 0 || (quizClearSince && Date.now() - quizClearSince >= 2500);
     const slidesPending = slideDocuments().some(item => !item.completed);
-    if (!slidesPending && (currentPageRecordComplete() || canFinishWithoutMedia) && quizSettled && Date.now() - stablePageSince >= 2500) {
+    if (!quizBusy() && !slidesPending && (currentPageRecordComplete() || canFinishWithoutMedia) && quizSettled && Date.now() - stablePageSince >= 2500) {
       const staticKey = 'page-' + (state.page || stableHash(signature));
       if (staticPageNotice !== staticKey) {
         staticPageNotice = staticKey;
@@ -2508,9 +2510,12 @@ class CourseController:
                 self.stop()
         finally:
             if self._session_id == quiz_session:
-                if self._running:
-                    self.eval_js("window.__yxy_agent_waiting = false")
-                self._quiz_busy = False
+                with self._quiz_gate_lock:
+                    # 先让 Python 接受就绪事件，再释放浏览器；反序会丢掉
+                    # eval_js 响应抵达前已经发出的唯一一条 next-ready。
+                    self._quiz_busy = False
+                    if self._running:
+                        self.eval_js("window.__yxy_agent_waiting = false")
 
     def _attempt_navigation_if_ready(self, *, recovery: bool = False) -> None:
         if self._quiz_busy or not self._running or self.state_machine.state != CourseState.WAITING_PAGE_CONFIRM:

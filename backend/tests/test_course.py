@@ -480,6 +480,90 @@ class CdpDocumentTests(unittest.TestCase):
         self.assertTrue(any("文档已滚动至末尾" in text for text in events))
 
 
+class QuizNavigationHandoffTests(unittest.TestCase):
+    def controller(self, mode="ai", **status_update):
+        controller = CourseController(lambda *_: None)
+        controller._active_config = CourseConfig(quiz_auto_answer=True, quiz_mode=mode)
+        controller._session_id = "quiz-session"
+        controller._observed_page_id = "1"
+        controller._running = True
+        controller._quiz_busy = True
+        controller.state_machine.transition(CourseState.ATTACHING)
+        controller.state_machine.transition(CourseState.LOADING)
+        controller.state_machine.observe_static_ready("page-1")
+        controller.state_machine.mark_content_finished("static", "page-1")
+        status = {"state": {"page": "1"}, "quizUnfinished": 0, **status_update}
+        controller.status_snapshot = Mock(return_value=status)
+        controller._last_status = status
+        controller.action_executor.navigation_target = Mock(return_value={"kind": "explicit-next", "x": 10, "y": 20})
+        controller._perform_navigation = Mock()
+        provider = Mock()
+        provider.answer.return_value = {"state": "completed", "result": {"completedCount": 3}}
+        controller._ai_answer_provider = controller._agent_answer_provider = provider
+        return controller
+
+    def test_ready_notification_during_browser_release_is_not_lost(self):
+        for mode in ("ai", "agent"):
+            with self.subTest(mode=mode):
+                controller = self.controller(mode)
+                busy_at_release = []
+
+                def evaluate(script):
+                    if script == "window.__yxy_agent_waiting = false":
+                        busy_at_release.append(controller._quiz_busy)
+                        # 浏览器刚释放就报告就绪，事件可早于 eval_js 的响应抵达。
+                        controller._handle_course_event({"type": "next-ready", "page": "1"})
+                    return True
+
+                controller.eval_js = Mock(side_effect=evaluate)
+                controller._handle_course_event({"type": "next-ready", "page": "1"})
+                controller._perform_navigation.assert_not_called()
+                with patch("yxy_course.QuizHandler"):
+                    controller._run_quiz_handler()
+                self.assertEqual(busy_at_release, [False])
+                controller._perform_navigation.assert_called_once()
+                controller._handle_course_event({"type": "next-ready", "page": "1"})
+                controller._perform_navigation.assert_called_once()
+
+    def test_quiz_release_still_waits_for_other_page_tasks(self):
+        for pending in ({"quizUnfinished": 1}, {"quizLoading": True},
+                        {"videos": [{"ended": False}]}, {"hasDocument": True},
+                        {"slideDocuments": [{"completed": False}]}):
+            with self.subTest(pending=pending):
+                controller = self.controller(**pending)
+
+                def evaluate(script):
+                    if script == "window.__yxy_agent_waiting = false":
+                        controller._handle_course_event({"type": "next-ready", "page": "1"})
+                    return True
+
+                controller.eval_js = Mock(side_effect=evaluate)
+                with patch("yxy_course.QuizHandler"):
+                    controller._run_quiz_handler()
+                controller._perform_navigation.assert_not_called()
+
+    def test_stopped_or_restarted_quiz_does_not_release_another_session(self):
+        for change in ("stop", "restart"):
+            with self.subTest(change=change):
+                controller = self.controller()
+                controller.eval_js = Mock(return_value=True)
+
+                def answer(*_args):
+                    if change == "stop":
+                        controller._running = False
+                    else:
+                        controller._session_id = "new-session"
+                    return {"state": "completed", "result": {"completedCount": 3}}
+
+                controller._ai_answer_provider.answer.side_effect = answer
+                with patch("yxy_course.QuizHandler"):
+                    controller._run_quiz_handler()
+                self.assertNotIn(unittest.mock.call("window.__yxy_agent_waiting = false"), controller.eval_js.call_args_list)
+                controller._perform_navigation.assert_not_called()
+                if change == "restart":
+                    self.assertTrue(controller._quiz_busy)
+
+
 class CourseControllerLifecycleTests(unittest.TestCase):
     @staticmethod
     def observable_controller():

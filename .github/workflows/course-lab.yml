@@ -34,6 +34,8 @@ jobs:
         run: python -m pytest -q
       - name: Existing dialog and PPT browser fixtures
         run: python backend/tools/quiz_simulator.py
+      - name: Quiz navigation handoff regression
+        run: python backend/tools/quiz_simulator.py --navigation-only
       - name: CLI course browser regression
         shell: pwsh
         run: |
