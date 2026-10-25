@@ -10,11 +10,12 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 import requests
@@ -25,7 +26,7 @@ from dgutbot.app.browser_paths import (
     normalize_browser_path, resolve_browser_path, scan_browser_directory,
 )
 from dgutbot.domain.course_scan import (
-    AuthRequiredError, CourseScanService, DirectorySampleRequired,
+    AuthRequiredError, CourseScanService, DirectorySampleRequired, ScanCancelled,
 )
 from dgutbot.domain.courseware_export import UA_BASE, CoursewareExportService, parse_directory
 from dgutbot.domain.courseware_filters import ExportOptions, export_options, source_kind
@@ -527,6 +528,9 @@ class SignBackend:
         self.course_scan = CourseScanService(
             lambda: list(self.courses), self._scan_course_directory,
             lambda: bool(self.token and self.courses), self._redact,
+            directory_session=self._course_scan_session,
+            cache_context=lambda: (self.user_id, self.token),
+            log=lambda text, kind: self._log(text, kind, "course"),
         )
         self.homework_archive = HomeworkArchive(self.root)
         self.homework_scan = HomeworkScanService(
@@ -734,6 +738,17 @@ class SignBackend:
         finally:
             api.close()
 
+    @contextmanager
+    def _course_scan_session(self, cancel: threading.Event) -> Iterator[Callable[[Course], Any]]:
+        """每个扫描线程复用一个连接；取消在请求边界生效，不再继续读后续教材。"""
+        api = BrowserApiClient(lambda: int(self.config.debug_port), dict(self.headers))
+        try:
+            yield lambda course: self._course_directory_payload(
+                course, api=api, cancel=cancel, deadline=time.monotonic() + 30,
+            )
+        finally:
+            api.close()
+
     def _scan_course_homeworks(self, course: Course) -> Any:
         """每个扫描 worker 使用独立 CDP 会话读取一门课程的全部作业。"""
         api = BrowserApiClient(lambda: int(self.config.debug_port), self.headers)
@@ -751,35 +766,64 @@ class SignBackend:
             api.close()
 
     @staticmethod
-    def _directory_json(api: BrowserApiClient, url: str, *, params: dict[str, Any] | None = None) -> Any:
+    def _directory_json(
+        api: BrowserApiClient, url: str, *, params: dict[str, Any] | None = None,
+        cancel: threading.Event | None = None, deadline: float | None = None,
+    ) -> Any:
         """目录请求先快速失败；仅对浏览器超时做一次更短的瞬时重试。"""
+        def request(timeout: float) -> Any:
+            if cancel is not None and cancel.is_set():
+                raise ScanCancelled()
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining < 1:
+                    raise TimeoutError("课程目录读取超时（30 秒预算已用完）")
+                timeout = min(timeout, remaining)
+            result = api.request("GET", url, params=params, timeout=timeout).json()
+            if cancel is not None and cancel.is_set():
+                raise ScanCancelled()
+            return result
+
         try:
-            return api.request("GET", url, params=params, timeout=12).json()
+            return request(12)
         except RuntimeError as error:
             if "AbortError" not in str(error):
                 raise
-            return api.request("GET", url, params=params, timeout=8).json()
+            return request(8)
 
-    def _course_directory_payload(self, course: Course, *, api: BrowserApiClient | None = None) -> Any:
+    def _course_directory_payload(
+        self, course: Course, *, api: BrowserApiClient | None = None,
+        cancel: threading.Event | None = None, deadline: float | None = None,
+    ) -> Any:
         """读取 2026-09-10 实页采样验证的教材目录，并标准化为解析器输入。"""
         request_api = api or self.api
+
+        def read(url: str, *, params: dict[str, Any] | None = None) -> Any:
+            return self._directory_json(request_api, url, params=params, cancel=cancel, deadline=deadline)
+
         try:
-            textbook_response = self._directory_json(
-                request_api, f"{LMS_BASE}/textbook/student/{course.id}/list", params={"lang": "zh"},
+            textbook_response = read(
+                f"{LMS_BASE}/textbook/student/{course.id}/list", params={"lang": "zh"},
             )
             textbooks = textbook_response if isinstance(textbook_response, list) else textbook_response.get("result", [])
-            class_response = self._directory_json(
-                request_api, f"{LMS_BASE}/classes/information/student/{course.id}", params={"lang": "zh"},
+            textbooks = [item for item in textbooks if isinstance(item, dict) and item.get("courseId")] if isinstance(textbooks, list) else []
+            # 没有可读教材时，班级信息不会产生任何课件结果。
+            if not textbooks:
+                return {"pages": []}
+            class_response = read(
+                f"{LMS_BASE}/classes/information/student/{course.id}", params={"lang": "zh"},
             )
             class_info = class_response.get("result", class_response) if isinstance(class_response, dict) else {}
             class_id = str(class_info.get("classId") or "")
             normalized: list[dict[str, Any]] = []
-            for textbook in textbooks if isinstance(textbooks, list) else []:
-                if not isinstance(textbook, dict) or not textbook.get("courseId"):
-                    continue
+            seen_textbooks: set[str] = set()
+            for textbook in textbooks:
                 textbook_id = str(textbook["courseId"])
-                info_response = self._directory_json(
-                    request_api, f"{LMS_BASE}/textbook/student/information",
+                if textbook_id in seen_textbooks:
+                    continue
+                seen_textbooks.add(textbook_id)
+                info_response = read(
+                    f"{LMS_BASE}/textbook/student/information",
                     params={"currentPlatformType": 1, "lang": "zh", "ocId": course.id, "textbookId": textbook_id},
                 )
                 info = info_response.get("result", info_response) if isinstance(info_response, dict) else {}
@@ -807,6 +851,8 @@ class SignBackend:
                         "contentType": "课件",
                     })
             return {"pages": normalized}
+        except (ScanCancelled, TimeoutError):
+            raise
         except Exception as error:
             if self._is_login_rejected(error):
                 raise AuthRequiredError("登录已失效") from error
@@ -815,7 +861,9 @@ class SignBackend:
             return course.raw
         for url in self._directory_urls(course.raw):
             try:
-                payload = self._directory_json(request_api, url)
+                payload = read(url)
+            except (ScanCancelled, TimeoutError):
+                raise
             except Exception as error:
                 if self._is_login_rejected(error):
                     raise AuthRequiredError("登录已失效") from error

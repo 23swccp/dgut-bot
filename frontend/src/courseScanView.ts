@@ -10,7 +10,7 @@ export type CourseScanStatus = {
   state: "idle" | "scanning" | "completed" | "cancelled" | "error" | "auth_required";
   loggedIn: boolean; scannedCourses: number; totalCourses: number; unfinishedCount: number;
   groups: LessonGroup[]; failures: { courseId: string; courseName: string; reason: string }[];
-  cachedAt: string; fromCache: boolean; error: string; openPhase: string; openError: string; selectedId: string;
+  cachedAt: string; fromCache: boolean; stopping?: boolean; error: string; openPhase: string; openError: string; selectedId: string;
 };
 
 export function filterLessonGroups(groups: LessonGroup[], query: string): LessonGroup[] {
