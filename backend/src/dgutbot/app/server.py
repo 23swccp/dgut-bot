@@ -63,11 +63,14 @@ def allowed_cors_origin(origin: str | None) -> str:
     return origin if valid else DEFAULT_FRONTEND_ORIGIN
 
 
-def mark_client_active() -> None:
+def mark_client_active(*, frontend_heartbeat: bool = False) -> None:
     global CLIENT_LAST_SEEN
     with CLIENT_STATE_LOCK:
         CLIENT_LAST_SEEN = time.monotonic()
-    CLIENT_CLOSED_EVENT.clear()
+    # 关窗前发出的普通请求可能比 Beacon 更晚到达，不能据此撤销关窗通知。
+    # 只有重新挂载页面发出的心跳，才能确认刷新或另一个界面仍然存活。
+    if frontend_heartbeat:
+        CLIENT_CLOSED_EVENT.clear()
 
 
 def client_last_seen() -> float:
@@ -164,7 +167,7 @@ class LocalApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/api/heartbeat":
-            mark_client_active()
+            mark_client_active(frontend_heartbeat=True)
             self._send_json(HTTPStatus.OK, {"ok": True})
             return
         if self.path == "/api/client-closed":
