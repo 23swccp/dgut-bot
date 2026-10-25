@@ -12,6 +12,8 @@ import { AboutGuide } from "./AboutGuide";
 import { SignUnavailablePage } from "./SignUnavailablePage";
 import { HomeworkInputPanel } from "./HomeworkInputPanel";
 import { LogPanel } from "./LogPanel";
+import { SettingsPanel } from "./SettingsPanel";
+import { SettingsAutosave, type AppConfig } from "./settingsAutosave";
 import { CoursewareExportPanel } from "./CoursewareExportPanel";
 import { addSignEvent, signEventView, type SignEvent } from "./signObservability";
 import { filterSignChoices, firstSignChoiceCursor, SelectedSignChoice, SignChoicePicker, stepSignChoiceCursor, type SignChoice } from "./SignChoicePicker";
@@ -21,23 +23,12 @@ import "./homeworkInput.css";
 
 type Page = "terminal" | "learning" | "courseware" | "homework" | "logs" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "classrooms" | "selected" | "monitoring";
-type AccountLogin = { enabled: boolean; username: string; has_password: boolean };
 type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
 type Course = { id: number; name: string; teacherName: string };
 type Classroom = { id: number; title: string; beginTime: string; statusLabel: string; ended?: boolean };
-type BrowserOption = { name: string; path: string };
-type AppConfig = {
-  browser_name?: string; browser_path?: string; save_log?: boolean; log_path?: string;
-  campus_login_on_startup?: boolean;
-  selection_auto_leave?: boolean;
-  course_playback_rate?: number; course_auto_dismiss_dialog?: boolean; course_document_scroll_enabled?: boolean;
-  course_quiz_auto_answer?: boolean; course_quiz_choice_enabled?: boolean;
-  course_quiz_judgment_enabled?: boolean; course_quiz_blank_enabled?: boolean;
-  course_ai_model_id?: number;
-};
 type AppInfo = { appName: string; version: string; repo: string };
 type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string; classroomId?: number | null; classroomName?: string; classrooms?: Classroom[]; classroomSelectionRequired?: boolean; activityMonitoring?: boolean; recoveryPending?: boolean; membershipPhase?: string; recoveryCourseName?: string; recoveryError?: string };
-type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; account?: AccountLogin; login?: LoginStatus; browsers?: BrowserOption[]; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
+type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; quizAutoAnswerArmed?: boolean; login?: LoginStatus; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
@@ -77,31 +68,15 @@ function App() {
   const [courseEvents, setCourseEvents] = useState<CourseEvent[]>([]);
   const [courseStatus, setCourseStatus] = useState<CourseStatus>({ running: false, connected: false, controllerState: "IDLE" });
   const [courses, setCourses] = useState<Course[]>([]);
-  const [logging, setLogging] = useState(true);
-  const [browser, setBrowser] = useState("自动检测");
-  const [path, setPath] = useState("");
-  const [detectedBrowsers, setDetectedBrowsers] = useState<BrowserOption[]>([]);
-  const [detectingBrowsers, setDetectingBrowsers] = useState(false);
-  const [logPath, setLogPath] = useState("./data.md");
-  const [campusLoginOnStartup, setCampusLoginOnStartup] = useState(false);
-  const [selectionAutoLeave, setSelectionAutoLeave] = useState(false);
-  const [accountEnabled, setAccountEnabled] = useState(false);
-  const [accountName, setAccountName] = useState("");
-  const [accountPassword, setAccountPassword] = useState("");
-  const [hasSavedPassword, setHasSavedPassword] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(8);
-  const [autoDismiss, setAutoDismiss] = useState(true);
-  const [documentScroll, setDocumentScroll] = useState(true);
-  const [quizAutoAnswer, setQuizAutoAnswer] = useState(false);
-  const [quizChoiceEnabled, setQuizChoiceEnabled] = useState(true);
-  const [quizJudgmentEnabled, setQuizJudgmentEnabled] = useState(true);
-  const [quizBlankEnabled, setQuizBlankEnabled] = useState(true);
+  const [config, setConfig] = useState<AppConfig>({});
+  const playbackRate = config.course_playback_rate ?? 8;
+  const [settingsWriter] = useState(() => new SettingsAutosave(call));
   const [helperRunning, setHelperRunning] = useState(false);
   const [courseScan, setCourseScan] = useState<CourseScanStatus>({ state: "idle", loggedIn: false, scannedCourses: 0, totalCourses: 0, unfinishedCount: 0, groups: [], failures: [], cachedAt: "", fromCache: false, error: "", openPhase: "idle", openError: "", selectedId: "" });
   const [lessonQuery, setLessonQuery] = useState("");
   const [lessonCursorId, setLessonCursorId] = useState("");
   const [exitingLearning, setExitingLearning] = useState(false);
-  const [saved, setSaved] = useState("");
+  const [notice, setNotice] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const handoffSentRef = useRef(false);
@@ -177,9 +152,7 @@ function App() {
       }
       else append(`后端连接失败：${result.error || "未知错误"}`);
     });
-    void call("get_account_login_status").then(result => { if (result.ok && result.account) loadAccount(result.account); });
     void call("get_login_status").then(result => { if (result.ok) acceptLoginStatus(result.login); });
-    void detectInstalledBrowsers();
   }, []);
   useEffect(() => {
     if (page !== "learning" || learningScanStartedRef.current) return;
@@ -313,87 +286,7 @@ function App() {
       return await response.json() as BackendResult;
     } catch (error) { return { ok: false, error: `后端连接失败：${String(error)}` }; }
   }
-  function loadConfig(config: AppConfig) {
-    setBrowser(config.browser_name || "自动检测"); setPath(config.browser_path || ""); setLogging(config.save_log !== false); setLogPath(config.log_path || "./data.md");
-    setCampusLoginOnStartup(config.campus_login_on_startup === true);
-    setSelectionAutoLeave(config.selection_auto_leave === true);
-    setPlaybackRate(config.course_playback_rate || 8); setAutoDismiss(config.course_auto_dismiss_dialog !== false); setDocumentScroll(config.course_document_scroll_enabled !== false);
-    const choiceEnabled = config.course_quiz_choice_enabled !== false; const judgmentEnabled = config.course_quiz_judgment_enabled !== false; const blankEnabled = config.course_quiz_blank_enabled !== false;
-    setQuizAutoAnswer(config.course_quiz_auto_answer !== false && (choiceEnabled || judgmentEnabled || blankEnabled)); setQuizChoiceEnabled(choiceEnabled);
-    setQuizJudgmentEnabled(judgmentEnabled); setQuizBlankEnabled(blankEnabled);
-  }
-  function loadAccount(account: AccountLogin) {
-    setAccountEnabled(account.enabled); setAccountName(account.username); setHasSavedPassword(account.has_password); setAccountPassword("");
-  }
-  function samePath(left: string, right: string) { return left.replace(/\//g, "\\").toLowerCase() === right.replace(/\//g, "\\").toLowerCase(); }
-  async function detectInstalledBrowsers() {
-    setDetectingBrowsers(true); const result = await call("detect_browsers"); setDetectingBrowsers(false);
-    if (result.ok) setDetectedBrowsers(result.browsers || []);
-    else save(result.error || "浏览器检测失败");
-  }
-  function chooseDetectedBrowser(option: BrowserOption) { setBrowser(option.name); setPath(option.path); }
-  function chooseCustomBrowser() {
-    const isDetectedPath = detectedBrowsers.some(option => samePath(option.path, path));
-    setBrowser("自定义浏览器");
-    if (isDetectedPath) setPath("");
-  }
-  function toggleQuizAutoAnswer() {
-    if (quizAutoAnswer) { setQuizAutoAnswer(false); return; }
-    if (!quizChoiceEnabled && !quizJudgmentEnabled && !quizBlankEnabled) {
-      setQuizChoiceEnabled(true); setQuizJudgmentEnabled(true); setQuizBlankEnabled(true);
-    }
-    setQuizAutoAnswer(true);
-  }
-  function toggleQuizChoice() {
-    const next = !quizChoiceEnabled; setQuizChoiceEnabled(next);
-    if (!next && !quizJudgmentEnabled && !quizBlankEnabled) setQuizAutoAnswer(false);
-  }
-  function toggleQuizJudgment() {
-    const next = !quizJudgmentEnabled; setQuizJudgmentEnabled(next);
-    if (!quizChoiceEnabled && !next && !quizBlankEnabled) setQuizAutoAnswer(false);
-  }
-  function toggleQuizBlank() {
-    const next = !quizBlankEnabled; setQuizBlankEnabled(next);
-    if (!quizChoiceEnabled && !quizJudgmentEnabled && !next) setQuizAutoAnswer(false);
-  }
-  function save(message: string) { setSaved(message); window.setTimeout(() => setSaved(""), 2200); }
-  async function saveSettings(values: Record<string, unknown>, message: string) {
-    setBusy(true); const result = await call("update_settings", values); setBusy(false);
-    if (result.ok) { if (result.config) loadConfig(result.config); save(message); }
-    else save(result.error || "保存设置失败");
-  }
-  async function saveAllSettings() {
-    if (busy) return;
-    const browserPath = path.trim();
-    if (browser === "自定义浏览器" && !browserPath) { save("请填写自定义浏览器程序路径"); return; }
-    setPath(browserPath); setBusy(true);
-    const settings = await call("update_settings", {
-      browser_name: browser === "自动检测" ? "" : browser,
-      browser_path: browserPath,
-      save_log: logging,
-      log_path: logPath,
-      campus_login_on_startup: campusLoginOnStartup,
-      selection_auto_leave: selectionAutoLeave,
-      course_playback_rate: playbackRate,
-      course_auto_dismiss_dialog: autoDismiss,
-      course_document_scroll_enabled: documentScroll,
-      course_quiz_auto_answer: quizAutoAnswer,
-      course_quiz_choice_enabled: quizChoiceEnabled,
-      course_quiz_judgment_enabled: quizJudgmentEnabled,
-      course_quiz_blank_enabled: quizBlankEnabled,
-    });
-    if (!settings.ok) { setBusy(false); save(settings.error || "保存设置失败"); return; }
-    const account = await call("update_account_login", { username: accountName, password: accountPassword, enabled: accountEnabled });
-    setBusy(false);
-    if (!account.ok) { save(account.error || "账号设置保存失败"); return; }
-    if (settings.config) loadConfig(settings.config);
-    if (account.account) loadAccount(account.account);
-    save("所有设置已保存");
-  }
-  async function openLog() {
-    if (busy) return; setBusy(true); const result = await call("open_log", { path: logPath }); setBusy(false);
-    if (!result.ok) save(result.error || "无法打开日志文件");
-  }
+  function loadConfig(patch: AppConfig) { setConfig(current => ({ ...current, ...patch })); }
   async function checkUpdate() {
     const result = await call("check_update");
     if (!result.ok) setUpdateStatus(current => current && { ...current, error: result.error || "无法检查更新" });
@@ -517,28 +410,21 @@ function App() {
     if (speed) {
       const rate = Number(speed[1]);
       if (rate < 1 || rate > 16) { appendLearning("倍速范围为 1–16。"); return; }
-      appendLearning(`> speed ${rate}`); setPlaybackRate(rate); setBusy(true);
-      await call("update_settings", { course_playback_rate: rate });
+      appendLearning(`> speed ${rate}`); setBusy(true);
+      const saved = await settingsWriter.save("course_playback_rate", "update_settings", { course_playback_rate: rate });
+      if (!saved.ok) { setBusy(false); appendLearning(saved.error || "保存倍速失败"); return; }
+      loadConfig(saved.config || { course_playback_rate: rate });
       if (helperRunning) await call("set_course_speed", { rate });
       setBusy(false); appendLearning(`视频倍速已设为 ${rate}×。`); return;
     }
     if (!input || normalized === "start" || input === "开始") {
-      appendLearning(input ? "> start" : "> Enter"); appendLearning(`正在启动刷课（${playbackRate}×）…`); setBusy(true);
-      await call("update_settings", {
-        course_playback_rate: playbackRate,
-        course_auto_dismiss_dialog: autoDismiss,
-        course_document_scroll_enabled: documentScroll,
-        course_quiz_auto_answer: quizAutoAnswer,
-        course_quiz_choice_enabled: quizChoiceEnabled,
-        course_quiz_judgment_enabled: quizJudgmentEnabled,
-        course_quiz_blank_enabled: quizBlankEnabled,
-      });
+      appendLearning(input ? "> start" : "> Enter"); appendLearning("正在启动刷课…"); setBusy(true);
+      if (!await settingsWriter.flush()) { setBusy(false); appendLearning("设置尚未保存成功，请返回设置页检查。"); return; }
       const result = await call("start_course_helper"); setBusy(false);
       if (result.ok) {
         setHelperRunning(true);
-        if (quizAutoAnswer) {
-          setQuizAutoAnswer(false);
-          appendLearning("刷课已启动；本次已启用自动答题，下次启动需重新开启。");
+        if (result.quizAutoAnswerArmed) {
+          appendLearning("刷课已启动；自动答题已启用。");
         } else appendLearning("刷课已启动。");
       }
       else appendLearning(result.error || "未找到已打开的课件学习页，请先输入 open。");
@@ -598,7 +484,7 @@ function App() {
   }
   function openAiWorkspace() {
     const opened = window.open("/ai.html", "dgut-ai-workspace");
-    if (!opened) { save("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
+    if (!opened) { setNotice("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
   const navItems: Page[] = ["terminal", "learning", "homework", "courseware", "logs", "settings", "about"];
@@ -617,8 +503,8 @@ function App() {
   };
 
   return <div className="app-shell"><main className="content">
+    {notice && <div className="toast" role="alert" onClick={() => setNotice("")}>{notice}</div>}
     <button className="settings" aria-label={sidebarOpen ? "收起侧边面板" : "打开侧边面板"} title={sidebarOpen ? "收起侧边面板" : "打开侧边面板"} onClick={() => setSidebarOpen(open => !open)} />
-    {saved && <div className="toast">✓ {saved}</div>}
     <UpdateDialog open={updateDialog.open} status={updateStatus} onClose={updateDialog.hide} onDownload={retryDownload} onInstall={installUpdate} repo={appInfo?.repo || ""}/>
     <section className={`workspace ${sidebarOpen ? "sidebar-open" : ""}`}>
       <AnimatePresence initial={false}>
@@ -680,21 +566,9 @@ function App() {
       {page === "homework" && <HomeworkInputPanel />}
       {page === "logs" && <LogPanel call={call} />}
       {page === "courseware" && <CoursewareExportPanel courses={courseChoices} onRefresh={refreshExportCourses} />}
-      {page === "settings" && <SettingsSection className="utility-settings" title="设置">
-        <div className="settings-surface">
-        <Card title="课堂活动监测" desc="选人时自动退课，结束后恢复；重新加入可能需教师审核。">
-          <div className="setting-line"><span>签到后监测选人并自动退课／加回</span><button type="button" role="switch" aria-checked={selectionAutoLeave} aria-label="签到后监测选人并自动退课加回" disabled={busy || signStatus.running || Boolean(signStatus.recoveryPending)} className={`switch ${selectionAutoLeave ? "on" : ""}`} onClick={() => void saveSettings({ selection_auto_leave: !selectionAutoLeave }, "课堂活动监测设置已保存")}><i /></button></div>
-          {(signStatus.running || signStatus.recoveryPending) && <p>请先停止监测并恢复原班级，再修改此设置。</p>}
-        </Card>
-        <Card title="启动浏览器"><div className="browser-scan-line"><button type="button" className={`refresh-button ${detectingBrowsers ? "spinning" : ""}`} aria-label={detectingBrowsers ? "正在重新检测浏览器" : "重新检测浏览器"} title={detectingBrowsers ? "检测中…" : "重新检测"} disabled={detectingBrowsers} onClick={detectInstalledBrowsers}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1 .1-6.1L20 11"/></svg></button></div><div className="browser-list">{detectedBrowsers.map(option => { const selected = browser !== "自定义浏览器" && samePath(path, option.path); return <button type="button" key={option.path} className={`browser-option ${selected ? "selected" : ""}`} onClick={() => chooseDetectedBrowser(option)}><i className="radio-dot"/><strong>{option.name}</strong></button>; })}<button type="button" className={`browser-option ${browser === "自定义浏览器" ? "selected" : ""}`} onClick={chooseCustomBrowser}><i className="radio-dot"/><strong>自定义路径</strong></button></div>{browser === "自定义浏览器" && <label className="custom-browser-path"><span>程序路径</span><input className="field" value={path} onChange={event => setPath(event.target.value)}/></label>}</Card>
-        <Card title="校园网"><div className="setting-line"><span>开机时打开校园网登录页</span><button type="button" aria-label="开机时打开校园网登录页" onClick={() => setCampusLoginOnStartup(!campusLoginOnStartup)} className={`switch ${campusLoginOnStartup ? "on" : ""}`}><i /></button></div></Card>
-        <Card title="账号登录恢复"><div className="setting-line"><span>启用账号密码自动重新登录</span><button type="button" aria-label="启用账号密码自动重新登录" onClick={() => setAccountEnabled(!accountEnabled)} className={`switch ${accountEnabled ? "on" : ""}`}><i /></button></div>{accountEnabled && <div className="account-fields"><input className="field" value={accountName} onChange={event => setAccountName(event.target.value)} placeholder="学号" autoComplete="username" maxLength={64}/><input className="field" type="password" value={accountPassword} onChange={event => setAccountPassword(event.target.value)} placeholder={hasSavedPassword ? "密码已保存；留空则不修改" : "密码"} autoComplete="current-password" maxLength={256}/></div>}</Card>
-        <Card title="刷课"><label className="setting-field"><span>视频倍速</span><input className="field rate-field" type="number" min="1" max="16" step="0.5" value={playbackRate} onChange={event => setPlaybackRate(Math.min(16, Math.max(1, Number(event.target.value) || 1)))}/></label><div className="setting-line"><span>自动答题</span><button type="button" aria-label="自动答题" onClick={toggleQuizAutoAnswer} className={`switch ${quizAutoAnswer ? "on" : ""}`}><i /></button></div>{quizAutoAnswer && <div className="quiz-answer-options"><div className="setting-line"><span>选择题</span><button type="button" aria-label="自动回答选择题" onClick={toggleQuizChoice} className={`switch ${quizChoiceEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>判断题</span><button type="button" aria-label="自动回答判断题" onClick={toggleQuizJudgment} className={`switch ${quizJudgmentEnabled ? "on" : ""}`}><i /></button></div><div className="setting-line"><span>填空题</span><button type="button" aria-label="自动回答填空题" onClick={toggleQuizBlank} className={`switch ${quizBlankEnabled ? "on" : ""}`}><i /></button></div></div>}</Card>
-        <Card title="日志与数据"><div className="setting-line"><span>保存完整运行日志</span><button type="button" aria-label="保存完整运行日志" onClick={() => setLogging(!logging)} className={`switch ${logging ? "on" : ""}`}><i /></button></div><div className="log-path-row"><input className="field" value={logPath} onChange={event => setLogPath(event.target.value)}/><button className="secondary" disabled={busy} onClick={openLog}>打开日志</button></div></Card>
+      {page === "settings" && <SettingsPanel config={config} call={call} writer={settingsWriter} onSaved={loadConfig} monitoring={signStatus.running || Boolean(signStatus.recoveryPending)}>
         <UpdateSettings status={updateStatus} version={appInfo?.version || ""} onCheck={() => { updateDialog.show(); void checkUpdate(); }} onOpen={updateDialog.show}/>
-        </div>
-        <div className="actions settings-save"><button className="primary" disabled={busy} onClick={saveAllSettings}>{busy ? "保存中…" : "保存全部设置"}</button></div>
-      </SettingsSection>}
+      </SettingsPanel>}
       {page === "about" && <AboutGuide version={appInfo?.version || ""} repo={appInfo?.repo || ""} />}
       </div>}
       </div>
@@ -702,8 +576,6 @@ function App() {
   </main></div>;
 }
 
-function SettingsSection({ title, subtitle, children, className = "" }: { title: string; subtitle?: string; children: React.ReactNode; className?: string }) { return <section className={`settings-page ${className}`}><div className="page-intro"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div></div>{children}</section>; }
-function Card({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) { return <article className="card"><h3>{title}</h3>{desc && <p>{desc}</p>}<div className="card-content">{children}</div></article>; }
 function StatusItem({ label, value, tone = "" }: { label: string; value: string; tone?: string }) { return <div className={`status-item ${tone}`}><span>{label}</span><strong title={value}>{value}</strong></div>; }
 
 export default App;

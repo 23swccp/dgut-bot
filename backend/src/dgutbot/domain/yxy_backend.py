@@ -67,7 +67,7 @@ class AppConfig:
     course_document_scroll_enabled: bool = True
     course_document_scroll_interval: float = 3.0
     course_document_scroll_speed: float = 3.0
-    course_quiz_auto_answer: bool = False
+    course_quiz_auto_answer: bool = True
     course_quiz_choice_enabled: bool = True
     course_quiz_judgment_enabled: bool = True
     course_quiz_blank_enabled: bool = True
@@ -491,8 +491,6 @@ class SignBackend:
         self.root = root or Path(__file__).resolve().parents[4]
         self.config_path = self.root / "config.json"
         self.config: AppConfig = self._load_config()
-        # 自动答题是一次性运行授权，不能从上一次程序会话继承。
-        self.config.course_quiz_auto_answer = False
         self._migrate_legacy_log()
         # 缓存仅在登录读取时验证后恢复，不把磁盘数据直接当作已登录状态。
         self._login_cache_path = self.root / "login-cache.json"
@@ -621,10 +619,7 @@ class SignBackend:
         return True
 
     def save_config(self) -> None:
-        values = self.config.to_mapping()
-        # 允许当前进程临时开启，但磁盘上的下一次启动状态始终关闭。
-        values["course_quiz_auto_answer"] = False
-        self._write_json_atomic(self.config_path, values)
+        self._write_json_atomic(self.config_path, self.config.to_mapping())
 
     def update_settings(self, **values) -> None:
         if "browser_path" in values:
@@ -636,8 +631,10 @@ class SignBackend:
                 values["browser_path"] = resolved
             else:
                 values["browser_path"] = ""
-        self.config = AppConfig.from_mapping(self.config.to_mapping() | values, self.root)
-        self.save_config()
+        updated = AppConfig.from_mapping(self.config.to_mapping() | values, self.root)
+        # 写入成功后才更新内存，保存失败不能让界面与重启后的配置不一致。
+        self._write_json_atomic(self.config_path, updated.to_mapping())
+        self.config = updated
 
     @staticmethod
     def _write_json_atomic(path: Path, values: dict) -> None:
