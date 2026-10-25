@@ -136,19 +136,20 @@ def test_gui_course_start_injects_ai_provider_after_probe():
         monkeypatch.setattr(backend_commands.backend.config, "course_quiz_auto_answer", True)
         monkeypatch.setattr(backend_commands.AI_BRIDGE, "probe", lambda *_args: observed.append("probe"))
         monkeypatch.setattr(backend_commands.backend, "_course_controller", controller)
-        monkeypatch.setattr(backend_commands.backend, "save_config", lambda: observed.append("disarmed"))
+        monkeypatch.setattr(backend_commands.backend, "save_config", lambda: pytest.fail("starting must not reset saved settings"))
         monkeypatch.setattr(backend_commands.backend, "start_course_helper", lambda **kwargs: observed.append(kwargs) or True)
-        result = backend_commands.handle("start_course_helper", {})
-    assert result == {"ok": True, "quizAutoAnswerArmed": False}
+        for _ in range(2):
+            result = backend_commands.handle("start_course_helper", {})
+            assert backend_commands.backend.config.course_quiz_auto_answer is True
+    assert result == {"ok": True, "quizAutoAnswerArmed": True}
     assert observed[0] == "probe"
     assert observed[1]["quiz_mode"] == "ai"
     assert observed[1]["ai_provider"].bridge is backend_commands.AI_BRIDGE
     assert observed[1]["ai_provider"].model_id == backend_commands.backend.config.course_ai_model_id
-    assert observed[2] == "disarmed"
-    assert backend_commands.backend.config.course_quiz_auto_answer is False
+    assert len(observed) == 4
 
 
-def test_failed_gui_course_start_keeps_one_shot_auto_answer_armed():
+def test_failed_gui_course_start_preserves_auto_answer_setting():
     from dgutbot.app import commands as backend_commands
 
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -158,7 +159,7 @@ def test_failed_gui_course_start_keeps_one_shot_auto_answer_armed():
         monkeypatch.setattr(
             backend_commands.backend,
             "save_config",
-            lambda: pytest.fail("failed starts must not consume the one-shot setting"),
+            lambda: pytest.fail("failed starts must not change saved settings"),
         )
         result = backend_commands.handle("start_course_helper", {})
     assert result == {"ok": False, "quizAutoAnswerArmed": True}

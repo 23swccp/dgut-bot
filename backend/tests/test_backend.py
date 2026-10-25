@@ -49,21 +49,30 @@ class BackendTests(unittest.TestCase):
         config = AppConfig.from_mapping({"poll_interval": 8, "unexpected": "ignored"}, Path("."))
         self.assertEqual(config.poll_interval, 8)
         self.assertFalse(hasattr(config, "unexpected"))
-        self.assertFalse(config.course_quiz_auto_answer)
+        self.assertTrue(config.course_quiz_auto_answer)
 
-    def test_quiz_auto_answer_is_session_only_and_starts_disabled(self):
+    def test_quiz_auto_answer_defaults_on_and_preserves_both_saved_choices(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "config.json").write_text(
-                json.dumps({"course_quiz_auto_answer": True}), encoding="utf-8",
-            )
             backend = self.make_backend(root)
-            self.assertFalse(backend.config.course_quiz_auto_answer)
-
-            backend.update_settings(course_quiz_auto_answer=True)
             self.assertTrue(backend.config.course_quiz_auto_answer)
-            saved = json.loads((root / "config.json").read_text(encoding="utf-8"))
-            self.assertFalse(saved["course_quiz_auto_answer"])
+            for enabled in (False, True):
+                backend.update_settings(course_quiz_auto_answer=enabled, course_playback_rate=6)
+                saved = json.loads((root / "config.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["course_quiz_auto_answer"], enabled)
+                restarted = self.make_backend(root)
+                self.assertEqual(restarted.config.course_quiz_auto_answer, enabled)
+                self.assertEqual(restarted.config.course_playback_rate, 6)
+
+    def test_failed_settings_write_does_not_change_active_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            backend.update_settings(course_playback_rate=6)
+            with patch.object(backend, "_write_json_atomic", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    backend.update_settings(course_playback_rate=12)
+            self.assertEqual(backend.config.course_playback_rate, 6)
+            self.assertEqual(self.make_backend(Path(directory)).config.course_playback_rate, 6)
 
     def test_config_normalizes_invalid_values_without_user_interaction(self):
         config = AppConfig.from_mapping(
