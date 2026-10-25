@@ -89,8 +89,8 @@ export function HomeworkReviewPanel({ itemId, onSubmissionResult }: {
   }
 
   return <section className="review-editor" aria-label="程序内互评">
-    <header><div><strong>{review?.title || "互评评分"}</strong><small>{loading ? "正在读取作业内容…" : `共 ${review?.tasks.length || 0} 份 · 未评分默认 ${review?.defaultScore ?? 100} 分`}</small></div></header>
-    {loading && <div className="review-loading">正在通过学校页面读取互评详情…</div>}
+    <header><div><strong>{review?.title || "互评评分"}</strong>{!loading && <small>共 {review?.tasks.length || 0} 份</small>}</div></header>
+    {loading && <div className="review-loading">正在读取互评详情…</div>}
     {!loading && review && review.tasks.length === 0 && <div className="review-loading">没有读取到可评分的互评作业。</div>}
     {!loading && review?.tasks.map(task => <article className={`review-task ${task.editable ? "" : "locked"}`} key={task.key}>
       <div className="review-task-head"><strong>{task.label}</strong>{!task.wasScored && <span className="default">未评分 · 默认 {review.defaultScore} 分</span>}</div>

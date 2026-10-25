@@ -234,7 +234,7 @@ export function HomeworkInputPanel() {
   const visibleGroups = filterHomeworkGroups(scan.groups, filter);
   const summary = scan.state === "idle" ? "准备扫描全部课程"
     : scan.state === "scanning"
-    ? `正在扫描 ${scan.scannedCourses} / ${scan.totalCourses} 门课程，已发现 ${scan.totalCount} 个作业`
+    ? `扫描中 ${scan.scannedCourses} / ${scan.totalCourses}`
     : scan.state === "auth_required" ? "等待登录后扫描全部课程"
       : scan.state === "error" ? (scan.error || "作业读取失败")
         : counts.all === 0 && counts.archived === 0 ? "没有发现作业"
@@ -249,7 +249,7 @@ export function HomeworkInputPanel() {
     <div className="page-intro"><div><h2>作业</h2></div></div>
     <article className="card homework-scan-card">
       <div className="homework-card-head">
-        <div><h3>全部作业</h3><p>{summary}{scan.fromCache ? " · 已显示 5 分钟内缓存" : ""}</p></div>
+        <div><h3>全部作业</h3><p>{summary}</p></div>
         {scan.state === "scanning"
           ? <button type="button" className="secondary compact" onClick={() => void cancelScan()}>取消</button>
           : <button type="button" className="secondary compact" onClick={() => void refreshScan(true)}>扫描全部课程</button>}
@@ -326,10 +326,10 @@ export function HomeworkInputPanel() {
       {scan.failures.length > 0 && <details className="homework-scan-failures"><summary>{scan.failures.length} 门课程扫描失败</summary>{scan.failures.map(item => <p key={`${item.courseId}-${item.courseName}`}>{item.courseName}：{item.reason}</p>)}</details>}
     </article>
     <article className="card homework-card">
-      <div className="homework-card-title"><h3>禁止粘贴类型作业输入</h3><p>把文字输入到程序浏览器中当前打开的优学院作业框。</p></div>
+      <div className="homework-card-title"><h3>禁止粘贴类型作业输入</h3></div>
       <div className="homework-status-line">
         <span className={`homework-status-dot ${status.state}`} aria-hidden="true" />
-        <div><strong>{status.state === "ready" ? "已识别输入框" : status.state === "checking" ? "识别中" : "未识别输入框"}</strong><small aria-live="polite">{status.message}{status.state === "ready" && status.pasteBlocked ? " · 当前作业限制普通粘贴" : ""}</small></div>
+        <div><strong>{status.state === "ready" ? "已识别输入框" : status.state === "checking" ? "识别中" : "未识别输入框"}</strong><small aria-live="polite">{status.message}</small></div>
       </div>
       <label className="homework-input-label" htmlFor="homework-text">要输入的内容</label>
       <textarea id="homework-text" value={text} maxLength={5000} disabled={busy} placeholder="在这里输入或粘贴作业内容…" onChange={event => { setText(event.target.value); setResult(null); }} onKeyDown={event => {
@@ -337,7 +337,7 @@ export function HomeworkInputPanel() {
       }} />
       <div className="homework-actions"><span>{text.length} / 5000 字</span><button type="button" className="primary" disabled={busy || status.state !== "ready" || !text.trim()} onClick={() => void send()}>{busy ? "输入中…" : "发送"}</button></div>
       {result && <p className={`homework-result ${result.good ? "good" : "error"}`} role="status">{result.message}</p>}
-      <p className="homework-note">内容会追加到作业框末尾；请在作业页面核对并自行提交。Ctrl + Enter 也可发送。</p>
+      <p className="homework-note">追加输入后，请在作业页面核对并提交。</p>
     </article>
   </section>;
 }

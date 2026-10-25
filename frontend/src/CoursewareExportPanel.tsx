@@ -202,7 +202,6 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
       <span className="cw-head-icon" aria-hidden="true"><FolderDown size={16} /></span>
       <div className="cw-head-text">
         <h2>课件导出</h2>
-        <p>按课程、章节和文件类型保存资料。正文生成 Markdown 与 HTML，附件下载到本机；测验不导出。</p>
       </div>
       <button className="secondary cw-refresh" disabled={refreshing || locked} onClick={() => void refresh()}>
         <RefreshCw size={14} className={refreshing ? "cw-spin" : ""} />{refreshing ? "读取中…" : "刷新课程"}
@@ -241,9 +240,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
           >
             ×
           </button>
-        ) : (
-          <kbd className="cw-search-kbd" title="按下 / 快速聚焦搜索">/</kbd>
-        )}
+        ) : null}
       </label>
     </div>
 
@@ -312,9 +309,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
           </section>)}
         </div>
 
-        <div className={`cw-list-fade ${canScrollDown ? "is-visible" : ""}`} aria-hidden="true">
-          <span>向下滚动查看更多 ↓</span>
-        </div>
+        <div className={`cw-list-fade ${canScrollDown ? "is-visible" : ""}`} aria-hidden="true" />
       </div>
 
       <aside className="cw-rail" aria-label="本次导出">
@@ -351,11 +346,9 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
               </button>
             </li>)}
           </ul>
-          <p className="cw-rail-hint">切换学期或搜索不会清空勾选；导出时按列表顺序逐门执行。</p>
         </> : <div className="cw-rail-empty">
           <div className="cw-rail-empty-icon" aria-hidden="true"><FolderDown size={24} /></div>
           <strong>从左侧勾选课程开始</strong>
-          <p>可按学期筛选或搜索，点击「全选当前」可快速批量加入导出队列。</p>
         </div>}
 
         {active && status && (
@@ -375,20 +368,16 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
             <span className="cw-rail-active-dot" />
             <div className="cw-rail-active-info">
               <strong>正在导出 ({status.courseDone}/{status.courseTotal})</strong>
-              <span>点击查看详细进度 ↓</span>
             </div>
           </div>
         )}
 
-        <p className="cw-rail-path">
-          保存至本机 <span className="cw-nobr"><code>courseware</code></span> 目录；每门课包含 <span className="cw-nobr"><code>index.md</code> 与 <code>manifest.json</code></span>。
-        </p>
       </aside>
     </div>
 
     <CoursewareExportFilters courses={chosen} options={options} onChange={setOptions}
       locked={active || pending} onLoading={setCatalogLoading} />
-    <div className="cw-export-actions"><span>{alreadyExported ? "当前选择已导出，调整课程或筛选后可再次导出。" : `已选 ${chosen.length} 门课程 · 按上方范围与类型导出`}</span>
+    <div className="cw-export-actions">
       <button className={`primary${alreadyExported ? " is-complete" : ""}`} disabled={locked || alreadyExported || !hasExportSelection(chosen, options)} onClick={() => void start()}>
         {pending ? "处理中…" : active ? (status?.state === "cancelling" ? "正在停止…" : "导出中…") : alreadyExported ? "已导出" : chosen.length ? `导出所选 ${chosen.length} 门` : "选择课程后导出"}
       </button>
@@ -419,7 +408,6 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
           <Square size={12} aria-hidden="true" />{status.state === "cancelling" ? "停止中…" : "停止队列"}
         </button>}
       </header>
-      {active && <p className="cw-progress-note">停止后保留已保存内容：当前文件处理结束后停止，后续课程不再执行。</p>}
       {status.error && <p className="cw-alert" role="alert"><TriangleAlert size={14} aria-hidden="true" />{status.error}</p>}
       {status.folderOpenError && <p className="cw-alert" role="alert"><TriangleAlert size={14} aria-hidden="true" />{status.folderOpenError}</p>}
       <ul className="cw-jobs">
@@ -470,11 +458,8 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
             <div className="cw-job-metrics">
               <span>章节/作业 <b>{item.chapterDone}</b>/{item.chapterTotal}</span>
               <span>页面 <b>{item.pageTotal}</b></span>
-              <span>新写 <b>{item.pageWritten}</b></span>
-              <span>未变 <b>{item.pageUnchanged}</b></span>
               <span>附件 <b>{item.fileWritten}</b></span>
             </div>
-            {empty && <p className="cw-job-empty">资源区、学习页与作业中未发现可导出的正文或附件；目录与清单已保存。</p>}
             {item.folder && <code className="cw-job-folder">{item.folder}</code>}
             {item.error && <p className="cw-alert" role="alert"><TriangleAlert size={13} aria-hidden="true" />{item.error}</p>}
             {item.failures.length > 0 && <details className="cw-job-failures">

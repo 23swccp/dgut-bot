@@ -2,21 +2,18 @@
 .cw-page{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px;color:#344054}
 .cw-page p{margin:0}
 .cw-page code{display:inline;padding:1px 5px;border-radius:5px;background:#f2f5f7;color:#4d5c6d;font:11px/1.7 "Cascadia Mono",monospace}
-.cw-nobr{display:inline-flex;white-space:nowrap}
 
 /* 标题 */
-.cw-head{display:flex;align-items:flex-start;gap:12px}
+.cw-head{display:flex;align-items:center;gap:12px}
 .cw-head-icon{flex:none;display:grid;width:32px;height:32px;place-items:center;border-radius:9px;background:#e9f8ef;color:#009b55;margin-top:1px}
 .cw-head-text{flex:1;min-width:0}
 .cw-head-text h2{font-size:23px;line-height:1.25;letter-spacing:-.4px;color:#273244;margin:0}
-.cw-head-text p{margin-top:4px;max-width:780px;font-size:13px;line-height:1.7;color:#7d8998}
 .cw-refresh{flex:none;display:inline-flex;align-items:center;gap:6px;margin:1px 0 0;padding:8px 13px;font-size:12px;border-radius:9px}
 .cw-spin{animation:cw-spin 1s linear infinite}
 @keyframes cw-spin{to{transform:rotate(360deg)}}
 
 .cw-filters{display:grid;gap:14px;padding:18px;border:1px solid #e2e7ec;border-radius:12px;background:#fff}
-.cw-filter-heading h3{margin:0 0 4px;color:#273244;font-size:16px}
-.cw-filter-heading p,.cw-catalog-head p{font-size:12px;color:#7d8998;line-height:1.7}
+.cw-filter-heading h3{margin:0;color:#273244;font-size:16px}
 .cw-filter-row{display:flex;flex-wrap:wrap;gap:12px 20px;border:0;padding:0;margin:0;min-width:0}
 .cw-filter-row legend{float:left;width:120px;font-size:12px;font-weight:600;line-height:20px;color:#586577}
 .cw-filter-row label{display:inline-flex;gap:7px;align-items:center;font-size:12px;cursor:pointer}
@@ -33,8 +30,7 @@
 .cw-catalog-item:hover{background:#f1fbf5}
 .cw-catalog-item span{flex:1;overflow-wrap:anywhere}
 .cw-catalog-item small{color:#8995a5;font-size:11px;flex:none}
-.cw-export-actions{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:10px 14px;background:#f6faf8;border:1px solid #dcebe2;border-radius:10px}
-.cw-export-actions span{font-size:12px;color:#628373}
+.cw-export-actions{display:flex;gap:16px;align-items:center;justify-content:flex-end;padding:10px 14px;background:#f6faf8;border:1px solid #dcebe2;border-radius:10px}
 .cw-export-actions button{margin:0;font-size:13px;padding:9px 20px}
 .cw-export-actions .is-complete:disabled{background:#edf2ef;color:#64796c;border:1px solid #dce6df;opacity:1;box-shadow:none}
 @media(max-width:760px){.cw-filter-row legend{float:none;width:auto;margin-bottom:9px}.cw-catalog-course header{align-items:flex-start;flex-direction:column}.cw-export-actions{align-items:stretch;flex-direction:column}.cw-catalog-head{flex-wrap:wrap}}
@@ -50,7 +46,6 @@
 .cw-search:focus-within{border-color:#9ed3b6;box-shadow:0 0 0 3px #009b5512}
 .cw-search input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:#2e3b4b;font-size:13px}
 .cw-search input::placeholder{color:#9aa5b1}
-.cw-search-kbd{display:inline-flex;align-items:center;justify-content:center;height:18px;min-width:18px;padding:0 4px;border-radius:4px;border:1px solid #e2e7ec;background:#f8f9fa;color:#9aa5b1;font:11px "Cascadia Mono",monospace;line-height:1;user-select:none}
 .cw-search-clear{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:50%;background:#eaeff2;color:#64748b;font-size:14px;line-height:1;cursor:pointer;padding:0;transition:background .15s,color .15s}
 .cw-search-clear:hover{background:#d8e2e6;color:#334155}
 
@@ -91,7 +86,6 @@
 /* 底部滚动提示 */
 .cw-list-fade{position:absolute;bottom:0;left:0;right:0;height:42px;background:linear-gradient(to bottom,rgba(255,255,255,0),#fff 55%);pointer-events:none;opacity:0;transition:opacity .2s ease;display:flex;align-items:flex-end;justify-content:center;padding-bottom:4px}
 .cw-list-fade.is-visible{opacity:1}
-.cw-list-fade span{font-size:10.5px;color:#8b96a4;background:#ffffffeb;padding:1px 9px;border-radius:999px;border:1px solid #e2e7ec;box-shadow:0 1px 2px rgba(21,32,43,0.04)}
 
 /* 右侧摘要 */
 .cw-rail{position:sticky;top:0;display:flex;flex-direction:column;gap:10px;padding:16px;border:1px solid #e2e7ec;border-radius:12px;background:#fff}
@@ -107,11 +101,9 @@
 .cw-chosen-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cw-chosen-remove{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border:0;border-radius:4px;background:transparent;color:#9aa5b1;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:background .15s,color .15s}
 .cw-chosen-remove:hover:not(:disabled){background:#e7ecea;color:#344054}
-.cw-rail-hint{color:#9aa5b1;font-size:11px;line-height:1.6}
 .cw-rail-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:22px 12px;gap:6px}
 .cw-rail-empty-icon{display:grid;place-items:center;width:44px;height:44px;border-radius:10px;background:#f2f6f4;color:#628373;margin-bottom:2px}
 .cw-rail-empty strong{font-size:13px;font-weight:600;color:#344054}
-.cw-rail-empty p{font-size:11.5px;color:#8b96a4;line-height:1.6}
 
 /* 正在运行快捷提示横条 */
 .cw-rail-active-banner{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:8px;background:#e0f2fe;border:1px solid #bae6fd;color:#0369a1;cursor:pointer;transition:background .15s,border-color .15s}
@@ -120,12 +112,10 @@
 @keyframes cw-pulse{0%{box-shadow:0 0 0 0 rgba(2,132,199,0.6)}70%{box-shadow:0 0 0 6px rgba(2,132,199,0)}100%{box-shadow:0 0 0 0 rgba(2,132,199,0)}}
 .cw-rail-active-info{display:flex;flex-direction:column;gap:1px;font-size:11.5px}
 .cw-rail-active-info strong{font-weight:600;color:#0c4a6e}
-.cw-rail-active-info span{font-size:10.5px;color:#0284c7}
 
 .cw-rail-actions{display:flex;gap:8px;margin-top:2px}
 .cw-rail-actions .primary{flex:2;margin:0;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 14px;font-size:13px;border-radius:9px}
 .cw-rail-actions .secondary{flex:1;margin:0;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 12px;font-size:13px;border-radius:9px}
-.cw-page .cw-rail-path{margin-top:6px;color:#a0aab6;font-size:11px;line-height:1.75}
 
 /* 提示与空状态 */
 .cw-alert{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1px solid #f0d4ce;border-radius:9px;background:#fdf4f2;color:#a8433a;font-size:12px;line-height:1.6}
@@ -150,7 +140,6 @@
 .cw-progress-warn{display:inline-flex;align-items:center;gap:4px;color:#a36029;font-size:11.5px}
 .cw-progress-muted{color:#9aa5b1;font-size:11.5px}
 .cw-stop{display:inline-flex;align-items:center;gap:6px;margin:0;padding:7px 12px;font-size:12px}
-.cw-page .cw-progress-note{margin-top:8px;color:#93a0af;font-size:11.5px}
 
 .cw-jobs{display:grid;gap:9px;margin:14px 0 0;padding:0;list-style:none}
 .cw-job{padding:12px;border:1px solid #edf1f4;border-radius:10px;background:#fbfcfd;transition:border-color .15s,background .15s}
@@ -160,7 +149,6 @@
 .cw-job.cancelling{border-color:#fde68a;background:#fffdfa}
 .cw-job.cancelled{border-color:#e5e7eb;background:#f9fafb}
 .cw-job.empty{border-color:#edf1f4;background:#fbfcfd}
-.cw-page .cw-job-empty{margin-top:6px;color:#9aa5b1;font-size:11.5px;line-height:1.6}
 .cw-job-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .cw-job-head strong{min-width:0;overflow-wrap:anywhere;color:#2c3949;font-size:13px;font-weight:600}
 
