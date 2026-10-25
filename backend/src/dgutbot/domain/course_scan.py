@@ -9,9 +9,11 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from queue import Empty, Queue
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
 
@@ -28,6 +30,10 @@ class AuthRequiredError(RuntimeError):
 
 
 class DirectorySampleRequired(RuntimeError):
+    pass
+
+
+class ScanCancelled(RuntimeError):
     pass
 
 
@@ -197,17 +203,36 @@ class CourseScanService:
         redact: Callable[[object], str],
         *,
         max_workers: int = 3,
+        directory_session: Callable[[threading.Event], AbstractContextManager[Callable[[Any], Any]]] | None = None,
+        cache_context: Callable[[], object] = lambda: None,
+        log: Callable[[str, str], None] = lambda *_: None,
     ) -> None:
         self._courses = courses
         self._directory = directory
         self._authenticated = authenticated
         self._redact = redact
         self._max_workers = max(1, min(4, max_workers))
+        self._directory_session = directory_session
+        self._cache_context = cache_context
+        self._context = cache_context()
+        self._log = log
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self._snapshot = self._empty()
-        self._cache_monotonic = 0.0
+        self._cache: dict[str, tuple[float, list[LessonItem]]] = {}
+        self._results: dict[str, list[LessonItem]] = {}
+        self._course_order: list[str] = []
+
+    def _check_context(self) -> None:
+        """缓存和迟到结果只能用于产生它们的登录会话。调用方持有锁。"""
+        context = self._cache_context()
+        if context != self._context:
+            self._cancel.set()
+            self._context = context
+            self._cache.clear()
+            self._results.clear()
+            self._snapshot = self._empty() | {"state": "auth_required"}
 
     @staticmethod
     def _empty() -> dict[str, Any]:
@@ -217,7 +242,9 @@ class CourseScanService:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            self._check_context()
             value = dict(self._snapshot)
+            value["stopping"] = bool(self._thread and self._thread.is_alive() and self._cancel.is_set())
             value["groups"] = [dict(group, items=[dict(item) for item in group["items"]]) for group in self._snapshot["groups"]]
             value["failures"] = [dict(item) for item in self._snapshot["failures"]]
             return value
@@ -240,84 +267,121 @@ class CourseScanService:
 
     def start(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
+            self._check_context()
             if self._thread and self._thread.is_alive():
                 return self.snapshot()
-            if not force and self._cache_monotonic and time.monotonic() - self._cache_monotonic < CACHE_SECONDS:
-                self._snapshot["fromCache"] = True
-                return self.snapshot()
             if not self._authenticated():
+                self._cache.clear()
+                self._results.clear()
                 self._snapshot = self._empty() | {"state": "auth_required", "error": "登录状态不可用，请重新登录"}
                 return self.snapshot()
+            courses = list(self._courses())
+            self._course_order = list(dict.fromkeys(str(course.id) for course in courses))
+            self._cache = {key: value for key, value in self._cache.items() if key in self._course_order}
+            # 刷新时先保留上次成功的列表，随后逐门替换，避免整个界面被清空。
+            self._results = {key: value[1] for key, value in self._cache.items()}
+            now = time.monotonic()
+            pending = [course for course in courses if force or str(course.id) not in self._cache
+                       or now - self._cache[str(course.id)][0] >= CACHE_SECONDS]
+            cached_count = len(courses) - len(pending)
             self._cancel = threading.Event()
-            self._snapshot = self._empty() | {"state": "scanning", "loggedIn": True}
-            self._thread = threading.Thread(target=self._run, name="unfinished-course-scan", daemon=True)
+            open_state = {key: self._snapshot[key] for key in ("openPhase", "selectedId", "openError")}
+            self._snapshot = self._empty() | open_state | {
+                "state": "scanning" if pending else "completed", "loggedIn": True,
+                "totalCourses": len(courses), "scannedCourses": cached_count,
+                "fromCache": bool(cached_count),
+            }
+            self._publish()
+            if not pending:
+                self._snapshot["cachedAt"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                return self.snapshot()
+            self._thread = threading.Thread(target=self._run, args=(pending, self._cancel, self._context),
+                                            name="unfinished-course-scan", daemon=True)
             self._thread.start()
             return self.snapshot()
 
     def cancel(self) -> dict[str, Any]:
-        self._cancel.set()
         with self._lock:
+            self._cancel.set()
             if self._snapshot["state"] == "scanning":
                 self._snapshot["state"] = "cancelled"
         return self.snapshot()
 
-    def _run(self) -> None:
-        courses = list(self._courses())
-        with self._lock:
-            self._snapshot["totalCourses"] = len(courses)
-        if not courses:
-            self._finish([], [], "completed")
-            return
-        items: list[LessonItem] = []
-        failures: list[dict[str, str]] = []
-        auth_failed = False
-        pool = ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="course-directory")
-        aborted = False
+    def _run(self, courses: list[Any], cancel: threading.Event, context: object) -> None:
+        started = time.monotonic()
+        jobs: Queue[Any] = Queue()
+        for course in courses:
+            jobs.put(course)
         try:
-            futures = {pool.submit(self._directory, course): course for course in courses}
-            for future in as_completed(futures):
-                course = futures[future]
-                if self._cancel.is_set():
-                    aborted = True
-                    for pending in futures:
-                        pending.cancel()
-                    self._finish(items, failures, "cancelled")
-                    return
-                try:
-                    payload = future.result()
-                    items.extend(flatten_lessons(course, payload))
-                except AuthRequiredError as error:
-                    auth_failed = True
-                    failures.append({"courseId": str(course.id), "courseName": course.name, "reason": self._redact(error)})
-                except Exception as error:  # 单门课程失败不终止其余课程
-                    failures.append({"courseId": str(course.id), "courseName": course.name, "reason": self._redact(error)})
-                with self._lock:
-                    self._snapshot["scannedCourses"] += 1
-                    self._snapshot["unfinishedCount"] = len(items)
-                if auth_failed:
-                    aborted = True
-                    self._cancel.set()
-                    for pending in futures:
-                        pending.cancel()
-                    self._finish(items, failures, "auth_required", "登录已失效，请重新登录")
-                    return
-        finally:
-            pool.shutdown(wait=not aborted, cancel_futures=aborted)
-        if self._cancel.is_set():
-            self._finish(items, failures, "cancelled")
+            # 每个 worker 领取下一门课程，整个批次只创建最多 max_workers 个连接。
+            with ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="course-directory") as pool:
+                futures = [pool.submit(self._worker, jobs, cancel, context)
+                           for _ in range(min(self._max_workers, len(courses)))]
+                for future in futures:
+                    future.result()
+        except Exception as error:
+            with self._lock:
+                if not cancel.is_set() and context == self._cache_context():
+                    self._snapshot.update(state="error", error=self._redact(error))
+            self._log(self._redact(error), "warn")
             return
-        state = "error" if failures and len(failures) == len(courses) else "completed"
-        self._finish(items, failures, state, "所有课程目录均读取失败" if state == "error" else "")
-
-    def _finish(self, items: list[LessonItem], failures: list[dict[str, str]], state: str, error: str = "") -> None:
-        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for item in items:
-            groups.setdefault((item.courseId, item.courseName), []).append(item.mapping())
-        mapped = [{"courseId": key[0], "courseName": key[1], "items": value} for key, value in groups.items()]
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
         with self._lock:
-            self._snapshot.update(state=state, groups=mapped, failures=failures,
-                                  unfinishedCount=len(items), cachedAt=now, fromCache=False,
-                                  error=self._redact(error), loggedIn=state != "auth_required")
-            if state in {"completed", "error"}:
-                self._cache_monotonic = time.monotonic()
+            if context != self._cache_context():
+                self._check_context()
+                return
+            if cancel.is_set():
+                return
+            failed = len(self._snapshot["failures"])
+            state = "error" if failed == self._snapshot["totalCourses"] else "completed"
+            self._snapshot.update(state=state, cachedAt=datetime.now().astimezone().isoformat(timespec="seconds"),
+                                  error="所有课程目录均读取失败" if state == "error" else "")
+            count = self._snapshot["unfinishedCount"]
+        self._log(f"课件目录扫描完成：发现 {count} 个未完成课件，{failed} 门课程失败，用时 {time.monotonic() - started:.1f} 秒", "info")
+
+    def _worker(self, jobs: Queue[Any], cancel: threading.Event, context: object) -> None:
+        session = self._directory_session(cancel) if self._directory_session else nullcontext(self._directory)
+        with session as directory:
+            while not cancel.is_set() and context == self._cache_context():
+                try:
+                    course = jobs.get_nowait()
+                except Empty:
+                    return
+                items = None
+                failure = None
+                auth_failed = False
+                try:
+                    items = flatten_lessons(course, directory(course))
+                except ScanCancelled:
+                    return
+                except Exception as error:  # 单门课程失败不终止其余课程。
+                    auth_failed = isinstance(error, AuthRequiredError)
+                    failure = {"courseId": str(course.id), "courseName": course.name, "reason": self._redact(error)}
+                with self._lock:
+                    if cancel.is_set() or context != self._cache_context():
+                        return
+                    key = str(course.id)
+                    if items is not None:
+                        self._results[key] = items
+                        self._cache[key] = (time.monotonic(), items)
+                    else:
+                        self._results.pop(key, None)
+                        self._cache.pop(key, None)
+                        self._snapshot["failures"].append(failure)
+                    self._snapshot["scannedCourses"] += 1
+                    if auth_failed:
+                        cancel.set()
+                        self._cache.clear()
+                        self._results.clear()
+                        self._snapshot.update(state="auth_required", loggedIn=False, error="登录已失效，请重新登录")
+                    self._publish()
+                if failure:
+                    self._log(f"{course.name}：{failure['reason']}", "warn")
+
+    def _publish(self) -> None:
+        """持锁发布每门课的结果，按原课程顺序排列。"""
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for key in self._course_order:
+            for item in self._results.get(key, []):
+                groups.setdefault((item.courseId, item.courseName), []).append(item.mapping())
+        mapped = [{"courseId": key[0], "courseName": key[1], "items": value} for key, value in groups.items()]
+        self._snapshot.update(groups=mapped, unfinishedCount=sum(len(group["items"]) for group in mapped))

@@ -1,10 +1,13 @@
 import threading
 import time
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from dgutbot.domain.course_scan import AuthRequiredError, CourseScanService, completion_state, flatten_lessons
+import pytest
+
+from dgutbot.domain.course_scan import AuthRequiredError, CourseScanService, ScanCancelled, completion_state, flatten_lessons
 from dgutbot.domain.yxy_backend import Course
 from dgutbot.domain.yxy_backend import SignBackend
 
@@ -20,7 +23,19 @@ def wait_done(service):
     deadline = time.monotonic() + 2
     while service.snapshot()["state"] == "scanning" and time.monotonic() < deadline:
         time.sleep(.01)
+    if service._thread and service.snapshot()["state"] != "scanning":
+        service._thread.join(2)
     return service.snapshot()
+
+
+def wait_progress(service, count):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = service.snapshot()
+        if state["scannedCourses"] >= count:
+            return state
+        time.sleep(.005)
+    raise AssertionError("扫描未发布预期的阶段结果")
 
 
 def test_flattens_deep_tree_and_keeps_path_and_real_url():
@@ -100,6 +115,233 @@ def test_cancel_scan_does_not_publish_late_success():
 def test_missing_login_does_not_start_worker():
     service = CourseScanService(lambda: [], lambda _course: {}, lambda: False, str)
     assert service.start()["state"] == "auth_required"
+
+
+def test_fast_course_is_openable_before_slow_course_finishes():
+    release = threading.Event()
+    def directory(course):
+        if course.id == 2:
+            assert release.wait(3)
+        return {"pages": [lesson(pageId=str(course.id))]}
+    service = CourseScanService(lambda: [Course(1, "快课"), Course(2, "慢课")], directory, lambda: True, str)
+    try:
+        service.start()
+        state = wait_progress(service, 1)
+        assert state["state"] == "scanning" and len(state["groups"]) == 1
+        item = state["groups"][0]["items"][0]
+        assert service.item(item["id"])["canAutoOpen"]
+        service.set_open_state("started", selected_id=item["id"])
+    finally:
+        release.set()
+        state = wait_done(service)
+    assert state["scannedCourses"] == 2 and len(state["groups"]) == 2
+    assert state["openPhase"] == "started" and state["selectedId"] == item["id"]
+
+
+def test_only_failed_courses_are_retried_within_cache_lifetime():
+    calls = []
+    def directory(course):
+        calls.append(course.id)
+        if course.id == 2 and calls.count(2) == 1:
+            raise RuntimeError("temporary failure")
+        return {"pages": [lesson(pageId=str(course.id))]}
+    service = CourseScanService(lambda: [Course(1, "正常"), Course(2, "失败")], directory, lambda: True, str)
+    service.start()
+    assert len(wait_done(service)["failures"]) == 1
+    service.start()
+    state = wait_done(service)
+    assert sorted(calls) == [1, 2, 2]
+    assert state["failures"] == [] and state["unfinishedCount"] == 2 and state["fromCache"]
+
+
+def test_expiration_is_per_course_and_removed_courses_leave_cache():
+    courses = [Course(1, "过期"), Course(2, "有效")]
+    calls = []
+    service = CourseScanService(lambda: courses, lambda course: calls.append(course.id) or {"pages": [lesson(pageId=str(course.id))]}, lambda: True, str)
+    service.start()
+    wait_done(service)
+    service._cache["1"] = (time.monotonic() - 301, service._cache["1"][1])
+    service.start()
+    wait_done(service)
+    assert sorted(calls) == [1, 1, 2]
+    courses.pop(0)
+    state = service.start()
+    assert list(service._cache) == ["2"] and state["unfinishedCount"] == 1
+
+
+def test_force_refresh_keeps_previous_list_until_replaced():
+    release = threading.Event()
+    refresh = False
+    def directory(_course):
+        if refresh:
+            assert release.wait(3)
+        return {"pages": [lesson(pageId="new" if refresh else "old")]}
+    service = CourseScanService(lambda: [Course(1, "课")], directory, lambda: True, str)
+    service.start()
+    wait_done(service)
+    refresh = True
+    try:
+        state = service.start(force=True)
+        assert state["state"] == "scanning" and state["groups"][0]["items"][0]["pageId"] == "old"
+    finally:
+        release.set()
+        state = wait_done(service)
+    assert state["groups"][0]["items"][0]["pageId"] == "new"
+
+
+def test_authentication_is_checked_before_using_cache():
+    authenticated = True
+    service = CourseScanService(lambda: [Course(1, "课")], lambda _: {"pages": [lesson()]}, lambda: authenticated, str)
+    service.start()
+    wait_done(service)
+    authenticated = False
+    assert service.start()["state"] == "auth_required"
+    assert not service.snapshot()["groups"] and not service._cache
+
+
+def test_changed_account_rejects_cached_and_inflight_results():
+    context = "old"
+    release = threading.Event()
+    entered = threading.Event()
+    def directory(_course):
+        entered.set()
+        assert release.wait(3)
+        return {"pages": [lesson()]}
+    service = CourseScanService(lambda: [Course(1, "课")], directory, lambda: True, str, cache_context=lambda: context)
+    try:
+        service.start()
+        assert entered.wait(2)
+        context = "new"
+        assert service.snapshot()["groups"] == []
+    finally:
+        release.set()
+        service._thread.join(2)
+    assert service.snapshot()["state"] == "auth_required" and not service._cache
+    service.start()
+    assert wait_done(service)["unfinishedCount"] == 1
+    context = "third"
+    assert service.snapshot()["groups"] == [] and not service._cache
+
+
+def test_cancel_stops_queued_courses_and_reuses_completed_cache_on_restart():
+    release = threading.Event()
+    entered = threading.Event()
+    calls = []
+    def directory(course):
+        calls.append(course.id)
+        if course.id == 2:
+            entered.set()
+            assert release.wait(3)
+        return {"pages": [lesson(pageId=str(course.id))]}
+    service = CourseScanService(lambda: [Course(i, str(i)) for i in range(1, 4)], directory, lambda: True, str, max_workers=1)
+    try:
+        service.start()
+        assert entered.wait(2)
+        cancelled = service.cancel()
+        assert cancelled["unfinishedCount"] == 1 and cancelled["stopping"]
+        # 在旧请求结束前重复启动不创建新的线程池。
+        assert service.start()["state"] == "cancelled"
+    finally:
+        release.set()
+        service._thread.join(2)
+    assert calls == [1, 2] and service.snapshot()["unfinishedCount"] == 1
+    assert not service.snapshot()["stopping"]
+    service.start()
+    assert wait_done(service)["unfinishedCount"] == 3
+    assert calls == [1, 2, 2, 3]
+
+
+def test_worker_sessions_are_reused_bounded_and_closed():
+    barrier = threading.Barrier(3)
+    active = set()
+    lock = threading.Lock()
+    counts = []
+    closed = []
+    @contextmanager
+    def session(_cancel):
+        with lock:
+            worker = len(counts)
+            counts.append(0)
+        def directory(course):
+            with lock:
+                active.add(worker)
+                assert len(active) <= 3
+                counts[worker] += 1
+            if course.id < 3:
+                barrier.wait(2)
+            with lock:
+                active.remove(worker)
+            return {"pages": []}
+        try:
+            yield directory
+        finally:
+            closed.append(worker)
+    service = CourseScanService(lambda: [Course(i, str(i)) for i in range(9)], lambda _: None, lambda: True, str, directory_session=session)
+    service.start()
+    state = wait_done(service)
+    assert state["state"] == "completed" and not state["failures"]
+    assert len(counts) == 3 and sum(counts) == 9 and sorted(closed) == [0, 1, 2]
+
+
+def test_empty_textbook_list_skips_class_lookup():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SignBackend(lambda *_: None, root=Path(directory))
+        backend.api.request = Mock()
+        backend.api.request.return_value.json.return_value = []
+        assert backend._course_directory_payload(Course(1, "空课")) == {"pages": []}
+        assert backend.api.request.call_count == 1
+
+
+def test_duplicate_textbooks_are_requested_once():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SignBackend(lambda *_: None, root=Path(directory))
+        responses = [Mock(), Mock(), Mock()]
+        for response, value in zip(responses, ([{"courseId": 9}, {"courseId": 9}], {"classId": 3}, {"list": []})):
+            response.json.return_value = value
+        backend.api.request = Mock(side_effect=responses)
+        assert backend._course_directory_payload(Course(1, "课")) == {"pages": []}
+        assert backend.api.request.call_count == 3
+
+
+def test_cancel_during_request_does_not_fetch_class_or_retry():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SignBackend(lambda *_: None, root=Path(directory))
+        cancel = threading.Event()
+        def request(*_args, **_kwargs):
+            cancel.set()
+            raise RuntimeError("浏览器请求失败：AbortError")
+        backend.api.request = Mock(side_effect=request)
+        with pytest.raises(ScanCancelled):
+            backend._course_directory_payload(Course(1, "课"), cancel=cancel)
+        assert backend.api.request.call_count == 1
+
+
+def test_course_budget_limits_request_and_prevents_followup():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SignBackend(lambda *_: None, root=Path(directory))
+        backend.api.request = Mock()
+        backend.api.request.return_value.json.return_value = [{"courseId": 9}]
+        with patch("dgutbot.domain.yxy_backend.time.monotonic", side_effect=[100, 106]):
+            with pytest.raises(TimeoutError, match="30 秒预算"):
+                backend._course_directory_payload(Course(1, "课"), deadline=105)
+        assert backend.api.request.call_count == 1
+        assert backend.api.request.call_args.kwargs["timeout"] == 5
+
+
+def test_backend_scan_session_reuses_one_client_and_closes_on_failure():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SignBackend(lambda *_: None, root=Path(directory))
+        client = Mock()
+        with patch("dgutbot.domain.yxy_backend.BrowserApiClient", return_value=client) as factory, patch.object(
+            backend, "_course_directory_payload", side_effect=[{}, RuntimeError("read failed")],
+        ) as read:
+            with pytest.raises(RuntimeError, match="read failed"):
+                with backend._course_scan_session(threading.Event()) as scan:
+                    scan(Course(1, "一"))
+                    scan(Course(2, "二"))
+            assert factory.call_count == 1 and read.call_count == 2
+            assert all(call.kwargs["api"] is client for call in read.call_args_list)
+            client.close.assert_called_once()
 
 
 def test_verified_lms_directory_endpoints_build_the_observed_ua_url():

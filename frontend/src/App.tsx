@@ -99,7 +99,7 @@ function App() {
   const [helperRunning, setHelperRunning] = useState(false);
   const [courseScan, setCourseScan] = useState<CourseScanStatus>({ state: "idle", loggedIn: false, scannedCourses: 0, totalCourses: 0, unfinishedCount: 0, groups: [], failures: [], cachedAt: "", fromCache: false, error: "", openPhase: "idle", openError: "", selectedId: "" });
   const [lessonQuery, setLessonQuery] = useState("");
-  const [lessonCursor, setLessonCursor] = useState(0);
+  const [lessonCursorId, setLessonCursorId] = useState("");
   const [exitingLearning, setExitingLearning] = useState(false);
   const [saved, setSaved] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -143,7 +143,8 @@ function App() {
       ?? { id: signStatus.classroomId, title: signStatus.classroomName || "已选择课堂", detail: "课堂详情暂不可用" };
   const filteredLessonGroups = filterLessonGroups(courseScan.groups, lessonQuery);
   const filteredLessons = filteredLessonGroups.flatMap(group => group.items);
-  const selectedLesson = filteredLessons[lessonCursor] || courseScan.groups.flatMap(group => group.items).find(item => item.id === courseScan.selectedId);
+  const lessonCursor = Math.max(0, filteredLessons.findIndex(item => item.id === lessonCursorId));
+  const selectedLesson = courseScan.groups.flatMap(group => group.items).find(item => item.id === courseScan.selectedId) || filteredLessons[lessonCursor];
 
   useEffect(() => { const log = signLogRef.current; log?.scrollTo({ top: log.scrollHeight, behavior: "smooth" }); }, [signEvents]);
   useEffect(() => {
@@ -155,7 +156,7 @@ function App() {
     if (phase === "classrooms") setCourseCursor(firstSignChoiceCursor(matchingClassrooms));
   }, [command, courses, phase]);
   useEffect(() => { coursePickerRef.current?.querySelector(".course-option.active")?.scrollIntoView({ block: "nearest" }); }, [courseCursor]);
-  useEffect(() => { setLessonCursor(0); }, [lessonQuery, courseScan.cachedAt]);
+  useEffect(() => { setLessonCursorId(""); }, [lessonQuery]);
   useEffect(() => {
     if (busy) return;
     const target = page === "terminal" ? commandRef : page === "learning" ? learningCommandRef : null;
@@ -186,10 +187,10 @@ function App() {
     void call("start_course_scan").then(result => { if (result.ok && result.scan) setCourseScan(result.scan); });
   }, [page]);
   useEffect(() => {
-    if (page === "learning" && courseScan.state === "auth_required" && courses.length > 0) {
+    if (page === "learning" && courseScan.state === "auth_required" && !courseScan.stopping && courses.length > 0) {
       void refreshCourseScan(false);
     }
-  }, [page, phase, courseScan.state, courses.length]);
+  }, [page, phase, courseScan.state, courseScan.stopping, courses.length]);
   useEffect(() => {
     let disposed = false;
     const pullScan = async () => {
@@ -481,14 +482,14 @@ function App() {
   }
   async function openScannedLesson(item: LessonItem) {
     if (!item.canAutoOpen || learningActive) return;
-    setLessonCursor(Math.max(0, filteredLessons.findIndex(candidate => candidate.id === item.id)));
+    setLessonCursorId(item.id);
     const result = await call("open_scanned_course", { itemId: item.id });
     if (!result.ok) appendLearning(result.error || "自动打开课件失败。");
     else if (result.scan) setCourseScan(result.scan);
   }
   function handleLessonKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown") { event.preventDefault(); setLessonCursor(value => Math.min(value + 1, Math.max(0, filteredLessons.length - 1))); }
-    else if (event.key === "ArrowUp") { event.preventDefault(); setLessonCursor(value => Math.max(0, value - 1)); }
+    if (event.key === "ArrowDown") { event.preventDefault(); setLessonCursorId(filteredLessons[Math.min(lessonCursor + 1, Math.max(0, filteredLessons.length - 1))]?.id || ""); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); setLessonCursorId(filteredLessons[Math.max(0, lessonCursor - 1)]?.id || ""); }
     else if (event.key === "Enter" && filteredLessons[lessonCursor]) { event.preventDefault(); void openScannedLesson(filteredLessons[lessonCursor]); }
     else if (event.key === "Escape") setLessonQuery("");
   }
@@ -628,10 +629,11 @@ function App() {
       {page === "learning" && <section className="terminal learning-terminal">
         <div className="learning-flow" aria-label="未完成课件">
           <div className="lesson-scan-head"><div className="lesson-scan-summary"><strong>未完成课件</strong><span>
-            {courseScan.state === "scanning" ? `正在扫描 ${courseScan.scannedCourses} / ${courseScan.totalCourses} 门课程，已发现 ${courseScan.unfinishedCount} 个未完成课件` :
+            {courseScan.state === "scanning" ? `正在扫描 ${courseScan.scannedCourses} / ${courseScan.totalCourses} 门课程，已列出 ${courseScan.unfinishedCount} 个课件 · 可直接打开，旧结果逐课更新` :
               courseScan.state === "auth_required" ? "等待登录" : `共 ${courseScan.unfinishedCount} 个${courseScan.fromCache ? " · 已显示 5 分钟内缓存" : ""}`}
           </span></div><div className="lesson-scan-actions">
-            {courseScan.state === "scanning" ? <button className="secondary compact" onClick={() => void cancelCourseScan()}>取消</button> : <button className="secondary compact" onClick={() => void refreshCourseScan(true)}>重新扫描</button>}
+            {courseScan.state === "scanning" ? <button className="secondary compact" onClick={() => void cancelCourseScan()}>取消</button> : <button className="secondary compact" disabled={courseScan.stopping} onClick={() => void refreshCourseScan(true)}>{courseScan.stopping ? "正在停止…" : "重新扫描"}</button>}
+            {courseScan.state !== "scanning" && courseScan.failures.length > 0 && <button className="secondary compact" disabled={courseScan.stopping} onClick={() => void refreshCourseScan(false)}>重试失败课程</button>}
             <button className="secondary compact learning-exit-button" disabled={!learningActive || exitingLearning} onClick={() => void exitCourseLearning()}>{exitingLearning ? "退出中…" : "退出刷课"}</button>
           </div></div>
           {courseScan.state === "auth_required" ? <div className="lesson-scan-message warning">登录状态不可用。请在程序浏览器中完成登录，再点击“重新扫描”。</div> : <>
@@ -647,7 +649,7 @@ function App() {
                   const chapterPath = item.chapterPath.join(" / ");
                   const runningHere = helperRunning && courseScan.selectedId === item.id;
                   return <div className={`lesson-entry ${runningHere ? "running" : ""}`} key={item.id}>
-                    <button type="button" role="option" aria-selected={index === lessonCursor} aria-label={item.canAutoOpen ? `${item.title}，${item.type}，${lessonProgress(item)}，打开` : `${item.title}：${item.unavailableReason}`} className={`lesson-row ${index === lessonCursor ? "active" : ""} ${item.canAutoOpen ? "" : "unavailable"}`} onMouseEnter={() => setLessonCursor(index)} onClick={() => void openScannedLesson(item)} disabled={!item.canAutoOpen || learningActive}>
+                    <button type="button" role="option" aria-selected={index === lessonCursor} aria-label={item.canAutoOpen ? `${item.title}，${item.type}，${lessonProgress(item)}，打开` : `${item.title}：${item.unavailableReason}`} className={`lesson-row ${index === lessonCursor ? "active" : ""} ${item.canAutoOpen ? "" : "unavailable"}`} onMouseEnter={() => setLessonCursorId(item.id)} onClick={() => void openScannedLesson(item)} disabled={!item.canAutoOpen || learningActive}>
                       <span><strong>{item.title}</strong>{chapterPath && chapterPath !== item.title && <small>{chapterPath}</small>}</span><em>{item.type}</em><b>{lessonProgress(item)}</b>{!item.canAutoOpen && <i>{item.unavailableReason}</i>}
                     </button>
                     {runningHere && <section className="lesson-inline-record" aria-label={`${item.title}运行记录`}>
