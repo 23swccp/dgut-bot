@@ -6,6 +6,13 @@ const render = (source: string, repo = "23swccp/dgut-bot") =>
   renderToStaticMarkup(<ReleaseMarkdown source={source} repo={repo} />);
 
 describe("GitHub Release markdown", () => {
+  it("recognizes Mermaid fences after HTML sanitization and keeps ordinary code intact", () => {
+    const html = render("```mermaid\nflowchart LR\nA[更新] --> B[重启]\n```\n\n```python\nprint('hello')\n```");
+    expect(html).toContain('<figure class="mermaid-diagram">');
+    expect(html).toContain("A[更新] --&gt; B[重启]");
+    expect(html).toContain('<pre><code class="language-python">');
+    expect(html).not.toContain("<pre><figure");
+  });
   it("links issues, PRs, contributors and full URLs", () => {
     const html = render("修复 #3，感谢 @DWDROME\n[合并改进](https://github.com/23swccp/dgut-bot/pull/6)\nhttps://example.com/release");
     expect(html).toContain('href="https://github.com/23swccp/dgut-bot/issues/3"');
