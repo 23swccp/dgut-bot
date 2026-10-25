@@ -143,7 +143,8 @@ function App() {
     void call("get_app_info").then(result => { if (result.ok && result.info) setAppInfo(result.info); });
     void call("get_settings").then(result => {
       if (result.ok && result.config) {
-        loadConfig(result.config);
+        // 初次读取可能晚于用户的自动保存；已经保存的新值优先。
+        setConfig(current => ({ ...result.config, ...current }));
         append("本地后端已连接，正在准备读取浏览器当前登录状态…");
         if (!signInitializationStartedRef.current) {
           signInitializationStartedRef.current = true;
