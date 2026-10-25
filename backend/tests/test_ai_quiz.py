@@ -7,6 +7,7 @@ from dgutbot.agent.protocol import AgentError
 from dgutbot.course.ai_quiz import AiAnswerError, UlearningAiAnswerProvider, _batches, _parse_reply, _prompt
 from dgutbot.course.yxy_course import CourseConfig
 from dgutbot.course.yxy_quiz import QuizHandler, QUIZ_STATE_JS
+from dgutbot.experimental.ulearning_ai import AiModel, UlearningAiError
 
 
 QUESTIONS = [
@@ -38,6 +39,7 @@ def test_prompt_marks_question_data_untrusted_and_contains_schema():
     assert envelope["requestId"] == "req"
     assert [question["index"] for question in envelope["questions"]] == [1, 2, 3]
     assert all("id" not in question and "answerSchema" not in question for question in envelope["questions"])
+    assert [q["answerFormat"] for q in envelope["questions"]] == [q["answerSchema"] for q in QUESTIONS]
 
 
 @pytest.mark.parametrize("text", [
@@ -153,15 +155,22 @@ class ReplyBridge:
         self.values = list(values)
         self.calls = 0
         self.question_indexes = []
+        self.model_ids = []
+
+    def models(self):
+        return (AiModel(1, "通义千问"),)
 
     def complete(self, messages, **kwargs):
         self.calls += 1
         self.model_id = kwargs.get("model_id")
+        self.model_ids.append(self.model_id)
         prompt = messages[0]["content"]
         envelope = json.loads(prompt.split("INPUT_JSON=", 1)[1])
         request_id = envelope["requestId"]
         self.question_indexes = [question["index"] for question in envelope["questions"]]
         value = self.values.pop(0)
+        if isinstance(value, Exception):
+            raise value
         text = value(request_id, envelope["questions"]) if callable(value) else value
         return SimpleNamespace(text=text, reasoning="ignored", upstream_tool_calls=())
 
@@ -202,15 +211,15 @@ def test_provider_repairs_invalid_reply_once():
     assert bridge.calls == 2
 
 
-def test_provider_falls_back_before_any_action_after_two_failures():
+def test_provider_reports_failure_before_any_action_after_two_invalid_replies():
     page, bridge, _logs, provider, controller = provider_setup(["bad", "still bad"])
     result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
-    assert result["state"] == "fallback"
+    assert result["state"] == "failed"
     assert page.actions == []
     assert bridge.calls == 2
 
 
-def test_provider_does_not_fallback_after_page_action_failure():
+def test_provider_does_not_generate_again_after_page_action_failure():
     page, bridge, _logs, provider, controller = provider_setup([valid_for])
     page.fail_click = True
     with pytest.raises(AgentError, match="selected"):
@@ -230,4 +239,161 @@ def test_provider_rejects_page_change_before_input():
     controller.status_snapshot = lambda: {"page": {"id": "other"}}
     with pytest.raises(AgentError, match="changed"):
         provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert page.actions == []
+
+
+@pytest.mark.parametrize("change", ["session", "page", "title", "stopped", "modal"])
+@pytest.mark.parametrize("bad_reply", [False, True])
+def test_provider_rejects_changes_during_ai_request_without_retry_or_model_switch(change, bad_reply):
+    page, bridge, _logs, provider, controller = provider_setup([])
+
+    def changed(request_id, questions):
+        if change == "session":
+            controller._session_id = "restarted"
+        elif change == "page":
+            page.state["pageId"] = "other"
+        elif change == "title":
+            page.state["questions"][0]["title"] = "new question"
+        elif change == "modal":
+            page.state["modal"] = {"title": "blocked"}
+        else:
+            controller._running = False
+        return "bad-json" if bad_reply else valid_for(request_id, questions)
+
+    bridge.values = [changed]
+    with pytest.raises(AgentError):
+        provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert page.actions == []
+    assert bridge.calls == 1
+
+
+def test_provider_starts_timed_quiz_before_reading_new_questions():
+    page, bridge, _logs, provider, controller = provider_setup([])
+    page.state.update(startRequired=True, startButton={"x": 50, "y": 50, "enabled": True, "pointMatches": True})
+    questions = page.state["questions"]
+    page.state["questions"] = []
+    handler = page.handler()
+
+    def click(x, y):
+        if x == 50:
+            page.actions.append(("start", x))
+            page.state["startRequired"] = False
+            page.state["questions"] = questions
+            return True
+        return page.click(x, y)
+
+    def answer(request_id, questions):
+        assert page.actions == [("start", 50)]
+        return valid_for(request_id, questions)
+
+    handler._click = click
+    bridge.values = [answer]
+    result = provider.answer(handler, controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "completed"
+    assert page.actions.count(("start", 50)) == 1
+    assert page.actions.count(("click", 90)) == 1
+
+
+def test_provider_does_not_request_ai_after_timed_start_failure():
+    page, bridge, _logs, provider, controller = provider_setup([])
+    page.state.update(startRequired=True, startButton=None)
+    with pytest.raises(AgentError, match="started"):
+        provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert bridge.calls == 0
+    assert page.actions == []
+
+
+def test_provider_multiple_choice_removes_extra_selection_and_applies_unordered_answers():
+    page, bridge, _logs, provider, controller = provider_setup([])
+    question = page.state["questions"][0]
+    question["type"] = "多选题"
+    question["choices"].append({"label": "C", "text": "6", "selected": True, "pos": {"x": 12, "y": 12}})
+    question["choices"][0]["selected"] = True
+    handler = page.handler()
+
+    def click(x, y):
+        if x in {10, 11, 12}:
+            page.actions.append(("click", x))
+            option = next(item for item in question["choices"] if item["pos"]["x"] == x)
+            option["selected"] = not option["selected"]
+            return True
+        return page.click(x, y)
+
+    def answer(request_id, questions):
+        assert questions[0]["type"] == "multiple_choice"
+        assert questions[0]["answerFormat"]["uniqueItems"] is True
+        return json.dumps({"requestId": request_id, "answers": [["B", "A"], True, ["answer"]]})
+
+    handler._click = click
+    bridge.values = [answer]
+    result = provider.answer(handler, controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "completed"
+    assert [o["label"] for o in question["choices"] if o["selected"]] == ["A", "B"]
+    assert ("click", 10) not in page.actions
+    assert page.actions.count(("click", 12)) == 1
+    assert page.actions.count(("click", 90)) == 1
+
+
+@pytest.mark.parametrize("answer", [[], ["A", "A"], ["Z"], "AB", [True]])
+def test_multiple_choice_invalid_reply_fails_before_input(answer):
+    page, bridge, _logs, provider, controller = provider_setup([])
+    page.state["questions"][0]["type"] = "多选题"
+
+    def invalid(request_id, _questions):
+        return json.dumps({"requestId": request_id, "answers": [answer, True, ["answer"]]})
+
+    bridge.values = [invalid, invalid]
+    assert provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))["state"] == "failed"
+    assert page.actions == []
+
+
+def test_provider_does_not_report_submission_when_all_detected_types_are_disabled():
+    page, bridge, _logs, provider, controller = provider_setup([])
+    config = CourseConfig(quiz_mode="ai", quiz_choice_enabled=False, quiz_judgment_enabled=False, quiz_blank_enabled=False)
+    assert provider.answer(page.handler(), controller, config)["state"] == "skipped"
+    assert bridge.calls == 0
+    assert page.actions == []
+
+
+def test_provider_routes_across_quota_and_format_failures_before_submitting_once():
+    page, bridge, logs, provider, controller = provider_setup([
+        UlearningAiError("quota exhausted"), "bad json", "still bad", valid_for,
+    ])
+    bridge.models = lambda: (AiModel(2, "豆包"), AiModel(1, "通义千问"), AiModel(6, "本地版"))
+    provider.model_id = 2
+    result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "completed"
+    assert bridge.model_ids == [2, 6, 6, 1]
+    assert page.actions.count(("click", 90)) == 1
+    assert any("自动切换" in text for text, _ in logs)
+
+
+def test_provider_reports_failure_after_all_enabled_models_fail():
+    page, bridge, _logs, provider, controller = provider_setup([
+        UlearningAiError("quota"), UlearningAiError("timeout"),
+    ])
+    bridge.models = lambda: (AiModel(1, "通义千问"), AiModel(6, "本地版"))
+    result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "failed" and "所有可用" in result["reason"]
+    assert bridge.model_ids == [1, 6]
+    assert page.actions == []
+
+
+def test_provider_does_not_guess_unsupported_question_types():
+    page, bridge, _logs, provider, controller = provider_setup([])
+    page.state["questions"][0]["type"] = "简答题"
+    result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "failed"
+    assert "不支持" in result["reason"]
+    assert bridge.calls == 0
+    assert page.actions == []
+
+
+def test_provider_does_not_apply_successful_early_batch_if_later_batch_fails():
+    page, bridge, _logs, provider, controller = provider_setup([valid_for, "bad", "still bad"])
+    for question in page.state["questions"]:
+        question["title"] = "x" * 15_000
+    result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "failed"
+    assert bridge.calls == 3
     assert page.actions == []

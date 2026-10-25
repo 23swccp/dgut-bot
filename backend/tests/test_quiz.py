@@ -3,7 +3,8 @@
 import json
 import unittest
 
-from dgutbot.course.yxy_quiz import QuizHandler
+from dgutbot.course.yxy_quiz import QuizHandler, QuizReader, QuizExecutor
+from dgutbot.agent.protocol import AgentError
 
 
 def make_state(questions, modal=None, viewport=None):
@@ -110,135 +111,32 @@ class ModalTests(unittest.TestCase):
 
 
 class AnswerFlowTests(unittest.TestCase):
-    def test_observed_auto_completion_before_submit_does_not_submit_again(self):
-        finished = make_state([question('q1', '单选题', '模拟题', finished=True)])
-        page = FakePage([finished])
-        handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=False, sleep=lambda _: None)
-        state = handler.read_state()
-        self.assertEqual(handler._submit_and_wait(state, 'q1', {'q1'}), 'done')
+    def test_reader_exposes_unfinished_question_semantics_without_clicking(self):
+        page = FakePage([make_state([
+            question("q1", "单选题", "合成问题", choices=[choice("A", "甲"), choice("B", "乙")]),
+            question("q2", "判断题", "已完成", finished=True),
+        ])])
+        handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=False)
+        questions = QuizReader.questions(handler.read_state())
+        self.assertEqual([q["id"] for q in questions], ["q1"])
+        self.assertEqual(questions[0]["type"], "single_choice")
+        self.assertEqual(questions[0]["answerSchema"]["items"]["enum"], ["A", "B"])
+        self.assertNotIn("pos", json.dumps(questions))
         self.assertEqual(page.clicks, [])
 
-    def test_disabled_question_type_is_not_answered(self):
-        state = make_state(
-            [
-                question("q1", "单选题", "选择题", choices=[choice("C", "丙")]),
-                question(
-                    "q2",
-                    "判断题",
-                    "判断题",
-                    judgment=[{"label": "错误", "pos": {"x": 900, "y": 360}}],
-                ),
-            ]
-        )
-        page = FakePage([state])
+    def test_executor_dry_run_cannot_modify_or_submit(self):
+        page = FakePage([make_state([question("q1", "单选题", "合成问题")])])
         handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=True)
-        summary = handler.answer_all(answer_choice=False, answer_judgment=True)
-        self.assertEqual(summary["done"], 1)
-        self.assertEqual(summary["skipped"], 0)
-
-    def test_dry_run_lists_every_question_without_clicking(self):
-        state = make_state(
-            [
-                question(
-                    "q1",
-                    "判断题",
-                    "题干一",
-                    judgment=[
-                        {"label": "正确", "pos": {"x": 900, "y": 300}},
-                        {"label": "错误", "pos": {"x": 900, "y": 360}},
-                    ],
-                ),
-                question("q2", "单选题", "题干二", choices=[choice("A", "甲"), choice("C", "丙")]),
-            ]
-        )
-        page = FakePage([state])
-        handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=True)
-        summary = handler.answer_all()
-        self.assertEqual(summary["done"], 2)
+        with self.assertRaises(AgentError):
+            QuizExecutor(handler).execute({"q1": ["A"]}, handler.read_state, handler.read_state)
         self.assertEqual(page.clicks, [])
-
-    def test_judgment_placeholder_defaults_to_wrong(self):
-        state = make_state(
-            [
-                question(
-                    "q1",
-                    "判断题",
-                    "题干一",
-                    judgment=[
-                        {"label": "正确", "pos": {"x": 900, "y": 300}},
-                        {"label": "错误", "pos": {"x": 900, "y": 360}},
-                    ],
-                )
-            ]
-        )
-        page = FakePage([state])
-        handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=True)
-        handler.answer_all()
-        # dry-run 不点击，验证计划目标：直接检查选择逻辑选中的是「错误」
-        fresh = handler.read_state()
-        target = "错误"
-        entry = next(j for j in fresh.questions[0].judgment if j["label"] == target)
-        self.assertEqual(entry["pos"], {"x": 900, "y": 360})
-
-    def test_choice_question_answers_with_placeholder_and_submits(self):
-        unanswered = make_state(
-            [
-                question(
-                    "q1",
-                    "单选题",
-                    "题干",
-                    choices=[choice("A", "甲"), choice("B", "乙"), choice("C", "丙"), choice("D", "丁")],
-                )
-            ]
-        )
-        answered = make_state(
-            [
-                question(
-                    "q1",
-                    "单选题",
-                    "题干",
-                    choices=[choice("A", "甲"), choice("B", "乙"), choice("C", "丙"), choice("D", "丁")],
-                    finished=True,
-                )
-            ]
-        )
-        # 选择选项后仍是未交卷态，第二次点击提交后才 finished。
-        page = FakePage([unanswered, unanswered, answered])
-        handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=False, jitter=0)
-        summary = handler.answer_all(option_label="C")
-        self.assertEqual(summary["done"], 1)
-        # 至少两次点击：选项 C（y=300） + 卷尾提交（y=527）
-        self.assertIn((900, 300), page.clicks)
-        self.assertIn((914, 527), page.clicks)
-
-    def test_blank_question_is_filled_and_submitted(self):
-        state = make_state([question("q1", "填空题", "题干")])
-        payload = json.loads(state)
-        payload["questions"][0]["blanks"] = [{"pos": {"x": 900, "y": 300}, "value": ""}]
-        answered = json.loads(make_state([question("q1", "填空题", "题干", finished=True)]))
-        answered["questions"][0]["blanks"] = [{"pos": {"x": 900, "y": 300}, "value": ","}]
-        page = FakePage([json.dumps(payload, ensure_ascii=False), json.dumps(answered, ensure_ascii=False)])
-        typed = []
-        handler = QuizHandler(
-            evaluate=page.evaluate,
-            click=page.click,
-            type_text=lambda text: typed.append(text) or True,
-            dry_run=False,
-            jitter=0,
-        )
-        summary = handler.answer_all()
-        self.assertEqual(summary["skipped"], 0)
-        self.assertEqual(summary["done"], 1)
-        self.assertEqual(typed, [","])
-        self.assertIn((900, 300), page.clicks)
 
     def test_stops_when_no_quiz_present(self):
         page = FakePage(['{"present": false}'])
-        handler = QuizHandler(evaluate=page.evaluate, click=page.click, dry_run=False)
-        summary = handler.answer_all()
-        self.assertEqual(
-            summary, {"done": 0, "skipped": 0, "failed": 0, "modals": 0}
-        )
+        handler = QuizHandler(evaluate=page.evaluate, click=page.click)
+        self.assertFalse(handler.read_state().present)
+        self.assertEqual(QuizReader.questions(handler.read_state()), [])
+        self.assertEqual(page.clicks, [])
 
 
 class TimedQuizTests(unittest.TestCase):
@@ -254,22 +152,16 @@ class TimedQuizTests(unittest.TestCase):
         return QuizHandler(evaluate=page.evaluate, click=page.click, sleep=lambda _: None,
                            log=lambda *_: None, dry_run=False, jitter=0, **kwargs)
 
-    def test_start_precedes_answers_and_single_submit(self):
-        active = self.state(False)
-        finished = json.loads(active)
-        finished["questions"][0]["finished"] = True
-        page = FakePage([self.state(), active, active, json.dumps(finished)])
-        summary = self.handler(page).answer_all()
-        self.assertEqual(summary["done"], 1)
-        self.assertEqual(summary["failed"], 0)
-        self.assertEqual(page.clicks, [(500, 400), (900, 300), (914, 527)])
+    def test_start_only_clicks_verified_start_button(self):
+        page = FakePage([self.state(), self.state(False)])
+        self.assertTrue(self.handler(page).ensure_started())
+        self.assertEqual(page.clicks, [(500, 400)])
 
     def test_stuck_mask_never_clicks_questions_or_restarts_on_controller_retry(self):
         page = FakePage([self.state()])
         attempts = set()
         for _ in range(2):
-            summary = self.handler(page, start_attempts=attempts).answer_all()
-            self.assertEqual(summary["failed"], 1)
+            self.assertFalse(self.handler(page, start_attempts=attempts).ensure_started())
         self.assertEqual(page.clicks, [(500, 400)])
 
     def test_disabled_or_obstructed_start_never_clicks(self):
@@ -286,13 +178,11 @@ class TimedQuizTests(unittest.TestCase):
                 self.assertFalse(self.handler(page).ensure_started())
                 self.assertEqual(page.clicks, [(500, 400)])
 
-    def test_dry_run_and_disabled_types_do_not_start_timer(self):
+    def test_dry_run_does_not_start_timer(self):
         page = FakePage([self.state()])
         handler = self.handler(page)
         handler.dry_run = True
-        self.assertEqual(handler.answer_all()["failed"], 0)
-        handler.dry_run = False
-        self.assertEqual(handler.answer_all(answer_choice=False, answer_judgment=False, answer_blank=False)["failed"], 0)
+        self.assertFalse(handler.ensure_started())
         self.assertEqual(page.clicks, [])
 
 

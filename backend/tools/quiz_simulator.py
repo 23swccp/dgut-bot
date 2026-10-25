@@ -12,6 +12,7 @@ import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.request import urlopen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +25,8 @@ from dgutbot.domain.yxy_backend import AppConfig, SignBackend
 from dgutbot.course.yxy_quiz import QUIZ_STATE_JS, QuizHandler, StandaloneBackend
 from dgutbot.course.yxy_course import INJECT_JS, CourseConfig, CourseController, PagePlan
 from dgutbot.course.dialogs import DIALOG_STATE_JS
+from dgutbot.course.ai_quiz import UlearningAiAnswerProvider
+from dgutbot.experimental.ulearning_ai import AiModel
 from quiz_probe import TabConnection
 
 
@@ -159,9 +162,9 @@ def result_matches(result: dict, *, choice: bool, judgment: bool, blank: bool) -
     }
     return (
         result.get("finished") == expected_finished
-        and result.get("choice") == ("C" if choice else "")
-        and result.get("judgment") == ("错误" if judgment else "")
-        and result.get("blank") == ("," if blank else "")
+        and result.get("choice") == ("A" if choice else "")
+        and result.get("judgment") == ("正确" if judgment else "")
+        and result.get("blank") == ("合成答案" if blank else "")
         and result.get("submitCount") == (1 if any((choice, judgment, blank)) else 0)
         and result.get("trustedClicks", 0) >= sum((choice, judgment, blank)) + (1 if any((choice, judgment, blank)) else 0)
     )
@@ -179,21 +182,30 @@ def run_case(
 ) -> tuple[bool, dict, dict]:
     backend.evaluate(f"window.resetQuiz({str(timed).lower()})")
     summary = {"done": 0, "skipped": 0, "failed": 0, "modals": 0}
-    if enabled:
+    if enabled and any((choice, judgment, blank)):
         handler = QuizHandler(
             evaluate=backend.evaluate,
             click=backend.click,
             type_text=backend.type_text,
-            sleep=lambda _seconds: None,
+            sleep=time.sleep,
             log=lambda *_args: None,
             dry_run=False,
             jitter=0,
         )
-        summary = handler.answer_all(
-            answer_choice=choice,
-            answer_judgment=judgment,
-            answer_blank=blank,
-        )
+        def complete(messages, **_kwargs):
+            envelope = json.loads(messages[0]["content"].split("INPUT_JSON=", 1)[1])
+            values = {"single_choice": "A", "true_false": True, "fill_blank": ["合成答案"]}
+            return SimpleNamespace(text=json.dumps({"requestId": envelope["requestId"],
+                "answers": [values[q["type"]] for q in envelope["questions"]]}), upstream_tool_calls=())
+
+        bridge = SimpleNamespace(models=lambda: (AiModel(1, "合成模型"),), complete=complete)
+        controller = SimpleNamespace(_running=True, _session_id="synthetic")
+        controller.status_snapshot = lambda: {"page": {"id": handler.read_state().page_id}}
+        outcome = UlearningAiAnswerProvider(bridge, lambda *_: None).answer(handler, controller,
+            CourseConfig(quiz_mode="ai", quiz_choice_enabled=choice,
+                         quiz_judgment_enabled=judgment, quiz_blank_enabled=blank))
+        summary["done"] = (outcome.get("result") or {}).get("completedCount", 0)
+        summary["failed"] = int(outcome["state"] != "completed")
     result = json.loads(backend.evaluate("JSON.stringify(window.getSimulatorResult())"))
     expected = (choice, judgment, blank) if enabled else (False, False, False)
     passed = summary["failed"] == 0 and result_matches(
@@ -391,7 +403,9 @@ def main() -> int:
                     counts = backend.evaluate('window.getSimulatorResult()')
                     backend.evaluate('window.showDialogCase(' + ','.join(json.dumps(x, ensure_ascii=False) for x in (kind, body, labels)) + ')')
                     handler = QuizHandler(evaluate=backend.evaluate, click=backend.click, sleep=lambda _: None, log=lambda *_: None, dry_run=False, jitter=0)
-                    handler.answer_all()
+                    modal = handler.read_state().modal
+                    if modal:
+                        handler.handle_modal(modal, {"modals": 0})
                     after_counts = backend.evaluate('window.getSimulatorResult()')
                     passed = passed and after_counts['submitCount'] == counts['submitCount']
                     passed = passed and backend.evaluate('window.dialogCaseResult.clicked') == ['我知道了']

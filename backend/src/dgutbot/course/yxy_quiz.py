@@ -6,8 +6,8 @@
 翻页会弹 .modal.fade.in 确认框。本模块只通过 CDP Input 域产生真实点击
 （isTrusted 事件），不调用任何作答接口。
 
-作答策略是固定占位：选择题点 C、判断题点"错误"、每个填空输入英文逗号。
-无法识别的题型会记录并跳过，未答完离开页面由弹窗放行。
+QuizReader 提取单选、多选、判断、填空的语义和答案约束；QuizExecutor
+执行 AI/Agent 校验后的答案；不提供任何固定答案策略。
 
 QuizHandler 不持有任何连接：通过构造参数注入 evaluate/click/type_text 等
 回调，既能被 CourseController 复用，也能用底部的 CLI 后端独立运行。
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import random
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -112,9 +111,19 @@ QUIZ_STATE_JS = r"""
   });
   const modal = courseDialogState();
   if (modal) modal.text = modal.title;
+  // 独立单页验证不启动整个刷课控制器，直接读取平台当前页标识。
+  let pageId = '';
+  if (window.__yxy_controller && typeof window.__yxy_controller.get_page_state === 'function') {
+    pageId = String((window.__yxy_controller.get_page_state() || {}).page || '');
+  }
+  if (!pageId && window.koLearnCourseViewModel) {
+    const unwrap = value => typeof value === 'function' ? value() : value;
+    const page = unwrap(window.koLearnCourseViewModel.currentPage);
+    pageId = String(page && unwrap(page.id) || '');
+  }
   return JSON.stringify({
     present: true,
-    pageId: String((window.__yxy_controller && window.__yxy_controller.get_page_state() || {}).page || ''),
+    pageId: pageId,
     viewport: {w: window.innerWidth, h: window.innerHeight},
     questions: questions,
     modal: modal,
@@ -340,249 +349,6 @@ class QuizHandler:
         self._log(f"  弹窗未处理：{fresh.get('type', modal.get('type'))} / {outcome}", "warn")
         return False
 
-    # ---- 单题选择（不提交） ----
-
-    def _fresh_question(self, qid: str) -> Question | None:
-        state = self.read_state()
-        if state.start_required or state.modal:
-            return None
-        return next((q for q in state.questions if q.qid == qid), None)
-
-    def _select_answer(self, state: QuizState, q: Question, option_label: str, judgment_label: str) -> str:
-        """点击一道未完成题的选项（不提交）。返回 'done' / 'skipped' / 'failed' / 'planned'。"""
-        target = judgment_label if q.type == "判断题" else option_label
-        if q.judgment:
-            entry = next((j for j in q.judgment if j["label"] == target), None)
-        else:
-            entry = next((c for c in q.choices if c["label"].upper() == target.upper()), None)
-        if entry is None:
-            self._log(f"  题{q.qid} 找不到选项「{target}」，跳过")
-            return "skipped"
-
-        if self.dry_run:
-            self._log(f"  [dry-run] 题{q.qid} {q.type} 将点「{target}」")
-            return "planned"
-
-        # 滚动到题目并等待坐标稳定；组件刚挂载时框架可能重置滚动位置，需重试
-        fresh = None
-        entry = None
-        for attempt in range(3):
-            if not self._scroll_question_into_view(q.qid):
-                self._log(f"  题{q.qid} 滚动失败，跳过", "warn")
-                return "skipped"
-            self._sleep(random.uniform(0.4, 0.9) * (attempt + 1))
-            fresh = self._fresh_question(q.qid)
-            if fresh is None:
-                return "failed"
-            if fresh.finished:
-                return "done"
-            if fresh.judgment:
-                entry = next((j for j in fresh.judgment if j["label"] == target), None)
-            else:
-                entry = next((c for c in fresh.choices if c["label"].upper() == target.upper()), None)
-            if entry is not None and 0 <= float(entry["pos"]["y"]) <= float(state.viewport.get("h", 0)):
-                break
-            self._log(f"  题{q.qid} 第{attempt + 1}次滚动后选项仍在视口外，重试")
-            entry = None
-        if entry is None:
-            self._log(f"  题{q.qid} 多次滚动后仍无法进入视口，跳过该题", "warn")
-            return "skipped"
-        if not self._click_in_viewport(entry["pos"], state.viewport, f"题{q.qid}选项{target}"):
-            return "failed"
-        self._sleep(random.uniform(0.5, 1.2))
-        self._log(f"  题{q.qid} 已选择「{target}」")
-        return "done"
-
-    def _fill_blanks(self, state: QuizState, q: Question, answers: list[str]) -> str:
-        if self._type_text is None or not q.blanks:
-            self._log(f"  题{q.qid} 未找到可输入的填空控件，跳过", "warn")
-            return "skipped"
-        if self.dry_run:
-            self._log(f"  [dry-run] 题{q.qid} {q.type} 将填写 {len(q.blanks)} 个空")
-            return "planned"
-        if not self._scroll_question_into_view(q.qid):
-            return "skipped"
-        self._sleep(random.uniform(0.3, 0.8))
-        fresh = self._fresh_question(q.qid)
-        if fresh is None:
-            return "failed"
-        blank_count = len(fresh.blanks)
-        for index in range(blank_count):
-            if index >= len(answers):
-                break
-            if self._evaluate(SCROLL_BLANK_JS % (json.dumps(q.qid), index)) != "ok":
-                self._log(f"  题{q.qid} 第{index + 1}空无法滚动到视口", "warn")
-                return "skipped"
-            self._sleep(random.uniform(0.3, 0.7))
-            fresh = self._fresh_question(q.qid)
-            if fresh is None or index >= len(fresh.blanks):
-                return "failed"
-            blank = fresh.blanks[index]
-            pos = blank.get("pos") if isinstance(blank, dict) else blank
-            if not isinstance(pos, dict) or not self._click_in_viewport(pos, state.viewport, f"题{q.qid}空{index + 1}"):
-                return "failed"
-            self._sleep(random.uniform(0.2, 0.5))
-            if not self._type_text(str(answers[index])):
-                self._log(f"  题{q.qid} 第{index + 1}空输入失败", "warn")
-                return "failed"
-            self._sleep(random.uniform(0.3, 0.8))
-        self._log(f"  题{q.qid} 已填写 {min(blank_count, len(answers))} 个空")
-        return "done"
-
-    # ---- 提交与验证 ----
-
-    def _submit_and_wait(self, state: QuizState, qid_sample: str, attempted_qids: set[str]) -> str:
-        """点卷尾提交并等待本轮已填写/选择的题 finished。"""
-        if self._evaluate(SCROLL_SUBMIT_JS) != "ok":
-            return "failed"
-        self._sleep(random.uniform(0.4, 0.9))
-        fresh = self._fresh_question(qid_sample)
-        if fresh is None:
-            return "failed"
-        latest = self.read_state()
-        if not latest.present or latest.modal or latest.start_required or latest.page_id != state.page_id:
-            return "failed"
-        by_id = {q.qid: q for q in latest.questions}
-        if attempted_qids and all(qid in by_id and by_id[qid].finished for qid in attempted_qids):
-            return "done"  # 平台已自动交卷，不再消耗一次提交。
-        current = by_id.get(qid_sample)
-        if current is None or current.submit is None:
-            return "failed"
-        if not self._click_in_viewport(current.submit, latest.viewport, "卷尾提交按钮"):
-            return "failed"
-        for _ in range(60):
-            self._sleep(0.5)
-            if not self._is_running():
-                return "failed"
-            check = self.read_state()
-            if not check.present:
-                return "done"
-            if check.modal is not None:
-                self.handle_modal(check.modal, {"modals": 0}, advance=True)
-                continue
-            by_id = {q.qid: q for q in check.questions}
-            if attempted_qids and all(by_id.get(qid) is None or by_id[qid].finished for qid in attempted_qids):
-                return "done"
-        return "nomove"
-
-    # ---- 主循环 ----
-
-    def answer_all(
-        self,
-        *,
-        option_label: str = "C",
-        judgment_label: str = "错误",
-        blank_text: str = ",",
-        answer_choice: bool = True,
-        answer_judgment: bool = True,
-        answer_blank: bool = True,
-        max_questions: int = 30,
-        advance_on_modal: bool = True,
-    ) -> dict:
-        """处理当前页面的整套测验：选择全部可答题 → 卷尾统一提交。
-
-        实测（调研 §5）：卷尾 submitQuiz 是整套提交，点一次全部判卷；
-        因此本方法先逐题选择、最后只提交一次。
-        """
-        summary = {"done": 0, "skipped": 0, "failed": 0, "modals": 0}
-        provider = FixedAnswerProvider(option_label, judgment_label, blank_text, answer_choice, answer_judgment, answer_blank)
-
-        # 弹窗优先清空（可能残留上一页的章节统计弹窗）
-        for _ in range(4):
-            state = self.read_state()
-            if not state.present or state.modal is None:
-                break
-            if not self.handle_modal(state.modal, summary, advance=advance_on_modal):
-                break
-
-        state = self.read_state()
-        if not state.present:
-            return summary
-        if state.start_required:
-            if not any((answer_choice, answer_judgment, answer_blank)):
-                return summary
-            if not self.ensure_started():
-                summary["failed"] = 0 if self.dry_run else 1
-                return summary
-
-        # 阶段1：逐题选择（不提交）
-        attempted: set[str] = set()
-        planned_done = False
-        for _ in range(max(1, max_questions)):
-            if not self._is_running():
-                return summary
-            state = self.read_state()
-            if not state.present:
-                break
-            if state.modal is not None:
-                if not self.handle_modal(state.modal, summary, advance=advance_on_modal):
-                    break
-                continue
-            def enabled(question: Question) -> bool:
-                return provider.enabled(question)
-
-            pending = next((
-                q for q in state.questions
-                if not q.finished and q.qid not in attempted and enabled(q)
-            ), None)
-            if pending is None:
-                break
-            attempted.add(pending.qid)
-            outcome = provider.apply(self, state, pending)
-            if outcome in ("done", "planned"):
-                summary["done"] += 1
-                if outcome == "planned":
-                    planned_done = True
-                    for q in state.questions:
-                        if q.finished or q.qid in attempted or not enabled(q):
-                            continue
-                        provider.apply(self, state, q)
-                        summary["done"] += 1
-                    break
-            elif outcome == "skipped":
-                summary["skipped"] += 1
-            else:
-                summary["failed"] += 1
-                break
-            self._sleep(random.uniform(1.2, 3.0))
-
-        if planned_done or self.dry_run:
-            return summary
-        if summary["done"] == 0:
-            # 没有任何可执行的选择或输入动作时，不提交空卷。
-            return summary
-
-        # 阶段2：卷尾统一提交
-        state = self.read_state()
-        if not state.present or not state.questions:
-            return summary
-        submitted_qids = {qid for qid in attempted if qid}
-        result = self._submit_and_wait(state, state.questions[0].qid, submitted_qids)
-        if result == "failed":
-            summary["failed"] += 1
-            self._log("提交失败，请人工检查", "warn")
-            return summary
-        if result == "nomove":
-            summary["failed"] += 1
-            self._log("提交后未确认到全部完成，请人工检查（可能仍有未答题）", "warn")
-        return summary
-
-
-class FixedAnswerProvider:
-    """Legacy GUI policy, separate from reading and page actions."""
-
-    def __init__(self, option="C", judgment="错误", blank=",", choice_enabled=True, judgment_enabled=True, blank_enabled=True):
-        self.option, self.judgment, self.blank = option, judgment, blank
-        self.choice_enabled, self.judgment_enabled, self.blank_enabled = choice_enabled, judgment_enabled, blank_enabled
-
-    def enabled(self, question):
-        return self.judgment_enabled if question.type == "判断题" else self.blank_enabled if question.type == "填空题" else self.choice_enabled
-
-    def apply(self, handler, state, question):
-        if question.type == "填空题":
-            return handler._fill_blanks(state, question, [self.blank] * len(question.blanks))
-        return handler._select_answer(state, question, self.option, self.judgment)
-
 
 class QuizReader:
     """Only unfinished question semantics cross the Agent boundary."""
@@ -599,13 +365,13 @@ class QuizReader:
         for question in state.questions:
             if question.finished:
                 continue
-            kind = {"单选题": "single_choice", "判断题": "true_false", "填空题": "fill_blank"}.get(question.type, "unsupported")
-            options = [{"id": str(c["label"]), "text": str(c.get("text") or "")} for c in question.choices] if kind == "single_choice" else []
-            if kind == "single_choice" and (not options or len({c["id"] for c in options}) != len(options) or any(not c["id"] for c in options)):
+            kind = {"单选题": "single_choice", "多选题": "multiple_choice", "判断题": "true_false", "填空题": "fill_blank"}.get(question.type, "unsupported")
+            options = [{"id": str(c["label"]), "text": str(c.get("text") or "")} for c in question.choices] if kind in {"single_choice", "multiple_choice"} else []
+            if kind in {"single_choice", "multiple_choice"} and (not options or len({c["id"] for c in options}) != len(options) or any(not c["id"] for c in options)):
                 kind = "unsupported"
             if kind == "fill_blank" and not question.blanks:
                 kind = "unsupported"
-            schema = {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": True, "items": {"enum": [c["id"] for c in options]}} if kind == "single_choice" else (
+            schema = {"type": "array", "minItems": 1, "maxItems": 1 if kind == "single_choice" else len(options), "uniqueItems": True, "items": {"enum": [c["id"] for c in options]}} if kind in {"single_choice", "multiple_choice"} else (
                 {"type": "boolean"} if kind == "true_false" else
                 {"type": "array", "minItems": len(question.blanks), "maxItems": len(question.blanks), "items": {"type": "string", "maxLength": 8192}}
                 if kind == "fill_blank" else {"not": {}}
@@ -621,6 +387,27 @@ class QuizExecutor:
 
     def __init__(self, handler: QuizHandler):
         self.handler = handler
+
+    def _set_option(self, qid: str, label: str, selected: bool, guard: Callable[[], QuizState]) -> None:
+        h = self.handler
+        for _attempt in range(3):
+            # 每次点击（包括失败重试）都重新读取坐标，避免滚动后复用旧目标。
+            state = guard()
+            question = next(q for q in state.questions if q.qid == qid)
+            options = question.judgment if question.type == "判断题" else question.choices
+            target = next((item for item in options if item["label"] == label), None)
+            if target is None:
+                raise AgentError("QUIZ_APPLY_FAILED", "The answer target is unavailable.")
+            if bool(target.get("selected")) == selected:
+                return
+            h._click_in_viewport(target["pos"], state.viewport)
+            h._sleep(0.2)
+        state = guard()
+        question = next(q for q in state.questions if q.qid == qid)
+        options = question.judgment if question.type == "判断题" else question.choices
+        target = next((item for item in options if item["label"] == label), None)
+        if target is None or bool(target.get("selected")) != selected:
+            raise AgentError("QUIZ_APPLY_FAILED", "The answer target could not be selected.")
 
     def execute(self, answers: dict[str, Any], guard, before_submit) -> dict[str, Any]:
         h = self.handler
@@ -670,30 +457,16 @@ class QuizExecutor:
                         raise AgentError("QUIZ_APPLY_FAILED", "Text input failed.")
                     # 输入后 Chromium 会异步把光标滚入视口；不能与下一空/提交按钮的滚动竞争。
                     h._sleep(0.2)
+            elif question.type == "多选题":
+                # 多选为独立开关；先取消多余选项，再补选，避免保留人工旧选项。
+                for option in question.choices:
+                    if option["label"] not in value:
+                        self._set_option(qid, option["label"], False, guard)
+                for label in value:
+                    self._set_option(qid, label, True, guard)
             else:
                 label = ("正确" if value else "错误") if question.type == "判断题" else value[0]
-                options = question.judgment if question.type == "判断题" else question.choices
-                target = next((item for item in options if item["label"] == label), None)
-                if target is None:
-                    raise AgentError("QUIZ_APPLY_FAILED", "The answer target is unavailable.")
-                # 页面可能在按下与释放之间滚动（例如并发的滚动/重排），导致点击落空。
-                # 未选中时重新读取坐标再点，最多 3 次；选中后不再重复点击。
-                for _attempt in range(3):
-                    if target.get("selected"):
-                        break
-                    if not h._click_in_viewport(target["pos"], state.viewport):
-                        h._sleep(0.2)
-                        state = guard()
-                        continue
-                    h._sleep(0.15)
-                    state = guard()
-                    fresh = next(q for q in state.questions if q.qid == qid)
-                    options = fresh.judgment if fresh.type == "判断题" else fresh.choices
-                    target = next((item for item in options if item["label"] == label), None)
-                    if target is None:
-                        raise AgentError("QUIZ_APPLY_FAILED", "The answer target is unavailable.")
-                if not target.get("selected"):
-                    raise AgentError("QUIZ_APPLY_FAILED", "The answer target could not be selected.")
+                self._set_option(qid, label, True, guard)
         guard()
         if h._evaluate(SCROLL_SUBMIT_JS) != "ok":
             raise AgentError("QUIZ_SUBMIT_FAILED", "The submit button is unavailable.")
@@ -708,6 +481,8 @@ class QuizExecutor:
                 value = answers[question.qid]
                 if question.type == "填空题":
                     matches = [str(blank.get("value") or "") for blank in question.blanks] == value
+                elif question.type == "多选题":
+                    matches = {item["label"] for item in question.choices if item.get("selected")} == set(value)
                 else:
                     label = ("正确" if value else "错误") if question.type == "判断题" else value[0]
                     options = question.judgment if question.type == "判断题" else question.choices
@@ -842,44 +617,26 @@ class StandaloneBackend:
 
 
 def main() -> int:
-    args = sys.argv[1:]
-    dry_run = "--commit" not in args
-    option_label = "C"
-    judgment_label = "错误"
-    port = PORT
-    for arg in args:
-        if arg.startswith("--option="):
-            option_label = arg.split("=", 1)[1].upper()
-        elif arg.startswith("--judgment="):
-            judgment_label = arg.split("=", 1)[1]
-        elif arg.startswith("--port="):
-            port = int(arg.split("=", 1)[1])
+    """只读检查测验；作答由程序的 AI 反代或显式 Agent 答案驱动。"""
+    import argparse
 
-    backend = StandaloneBackend(port=port, dry_run=dry_run, log=print)
-    handler = QuizHandler(
-        evaluate=backend.evaluate,
-        click=backend.click,
-        type_text=backend.type_text,
-        log=print,
-        dry_run=dry_run,
-    )
-    state = handler.read_state()
-    if not state.present:
-        print("当前页面没有检测到测验 (.question-view)")
-        return 1
-    print(f"检测到 {len(state.questions)} 道题：")
-    for q in state.questions:
-        flag = "已答" if q.finished else "未答"
-        print(f"  [{flag}] {q.type} {q.title[:50]}" + (f" (空×{len(q.blanks)})" if q.blanks else ""))
-    if state.modal:
-        print(f"检测到弹窗：{state.modal['text'][:60]}")
-    print()
-    summary = handler.answer_all(option_label=option_label, judgment_label=judgment_label)
-    print(
-        f"完成：done={summary['done']} skipped={summary['skipped']} "
-        f"failed={summary['failed']} modals={summary['modals']}"
-    )
-    return 0
+    parser = argparse.ArgumentParser(description="只读查看当前测验结构；自动答题请使用小皮卡 AI 反代。")
+    parser.add_argument("--port", type=int, default=PORT)
+    args = parser.parse_args()
+    backend = StandaloneBackend(port=args.port, dry_run=True, log=print)
+    try:
+        state = QuizHandler(evaluate=backend.evaluate, click=backend.click).read_state()
+        if not state.present:
+            print("当前页面没有检测到测验 (.question-view)")
+            return 1
+        print(f"检测到 {len(state.questions)} 道题：")
+        for q in state.questions:
+            flag = "已答" if q.finished else "未答"
+            print(f"  [{flag}] {q.type}，选项 {len(q.choices)} 个，填空 {len(q.blanks)} 个")
+        print("只读检查完成；请在小皮卡中开启 AI 自动答题。")
+        return 0
+    finally:
+        backend.close()
 
 
 if __name__ == "__main__":

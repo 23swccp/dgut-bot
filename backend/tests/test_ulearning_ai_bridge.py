@@ -102,9 +102,11 @@ def test_backend_chat_command_returns_only_safe_tool_count():
 
     reply = SimpleNamespace(text="answer", reasoning="", upstream_tool_calls=({"arguments": "private"},))
     with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(backend_commands.AI_BRIDGE, "models", lambda: (AiModel(1, "Qwen"),))
         monkeypatch.setattr(backend_commands.AI_BRIDGE, "complete", lambda _messages, **_kwargs: reply)
-        result = backend_commands.handle("ai_chat", {"messages": [{"role": "user", "content": "hello"}]})
-    assert result == {"ok": True, "answer": "answer", "reasoning": "", "upstreamToolCallCount": 1}
+        result = backend_commands.handle("ai_chat", {"modelId": 1, "messages": [{"role": "user", "content": "hello"}]})
+    assert result == {"ok": True, "answer": "answer", "reasoning": "", "upstreamToolCallCount": 1,
+                      "modelId": 1, "modelName": "Qwen"}
     assert "private" not in repr(result)
 
 

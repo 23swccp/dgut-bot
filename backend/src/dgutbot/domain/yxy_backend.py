@@ -60,7 +60,7 @@ class AppConfig:
     lng: float = 113.3993
     address: str = "东莞理工学院"
     campus_login_on_startup: bool = False
-    # 课件学习辅助：播放、文档阅读、章节衔接与测验自动作答（实验性，占位选项）。
+    # 课件学习辅助：播放、文档阅读、章节衔接与 AI 测验自动作答。
     course_playback_rate: float = 8.0
     course_auto_dismiss_dialog: bool = True
     course_document_scroll_enabled: bool = True
@@ -1217,7 +1217,7 @@ class SignBackend:
             document_scroll_interval=float(self.config.course_document_scroll_interval),
             document_scroll_speed=float(self.config.course_document_scroll_speed),
             quiz_auto_answer=bool(self.config.course_quiz_auto_answer) if quiz_mode is None else quiz_mode != "disabled",
-            quiz_mode=quiz_mode or ("ai" if ai_provider is not None else "fixed"),
+            quiz_mode=quiz_mode or ("ai" if self.config.course_quiz_auto_answer else "disabled"),
             quiz_choice_enabled=bool(self.config.course_quiz_choice_enabled),
             quiz_judgment_enabled=bool(self.config.course_quiz_judgment_enabled),
             quiz_blank_enabled=bool(self.config.course_quiz_blank_enabled),

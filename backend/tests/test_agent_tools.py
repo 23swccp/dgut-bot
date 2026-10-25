@@ -1,7 +1,8 @@
 import unittest
+from unittest.mock import Mock
 from types import SimpleNamespace
 
-from dgutbot.agent.protocol import validate_schema
+from dgutbot.agent.protocol import AgentError, validate_schema
 from dgutbot.agent.schemas import OUTPUTS
 from dgutbot.agent.tools import build_registry
 
@@ -16,6 +17,14 @@ class FakeBackend:
 
 
 class AgentToolTests(unittest.TestCase):
+    def test_removed_fixed_mode_cannot_start_a_task(self):
+        services = Mock()
+        registry = build_registry(FakeBackend(), services=services)
+        with self.assertRaises(AgentError) as caught:
+            registry.call("course.start", {"quizMode": "fixed", "idempotencyKey": "removed_mode"})
+        self.assertEqual(caught.exception.code, "TOOL_INPUT_INVALID")
+        services.start_course.assert_not_called()
+
     def test_first_read_only_tools_are_self_describing(self):
         registry = build_registry(FakeBackend(), instance_id="instance_test")
         names = [item["name"] for item in registry.capabilities()]

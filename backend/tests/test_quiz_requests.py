@@ -152,8 +152,8 @@ class QuizRequestTests(unittest.TestCase):
         self.assertEqual(self.manager.get(self.request["requestId"])["state"], "cancelled")
         self.assertEqual(self.fixture.actions, [])
 
-    def test_multiple_choice_is_unsupported(self):
-        self.fixture.state["questions"][0]["type"] = "多选题"
+    def test_essay_is_unsupported(self):
+        self.fixture.state["questions"][0]["type"] = "简答题"
         request = self.manager.create(self.task["taskId"], "session_synthetic", "page_synthetic", self.fixture.handler(), lambda: self.context, 10000)
         self.assertEqual(request["questions"][0]["type"], "unsupported")
         self.assert_error("QUIZ_UNSUPPORTED_TYPE", {**self.payload, "requestId": request["requestId"]})

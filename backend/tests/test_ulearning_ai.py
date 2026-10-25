@@ -64,6 +64,17 @@ def test_parse_event_stream_handles_text_reasoning_and_done():
     assert chunks[0].tool_calls == ({"id": "call-1"},)
 
 
+def test_parse_event_stream_reports_observed_daily_quota_error():
+    with pytest.raises(UlearningAiError, match="doubao每日token数或联网搜索次数已用完"):
+        list(parse_event_stream(["data:doubao每日token数或联网搜索次数已用完".encode('utf-8')]))
+
+
+def test_parse_event_stream_does_not_echo_unknown_plaintext_errors():
+    with pytest.raises(UlearningAiError) as caught:
+        list(parse_event_stream(["data:Authorization: private-session-value"]))
+    assert str(caught.value) == "The AI service returned an invalid event stream."
+
+
 def test_client_uses_observed_contract_and_closes_response():
     response = FakeResponse([b'data: {"data":"ok","reasoningContent":""}'])
     session = FakeSession(response)

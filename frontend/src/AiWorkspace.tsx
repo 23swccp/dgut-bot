@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { SafeMarkdown } from "./safeMarkdown";
 
 type Role = "user" | "assistant";
-type Message = { id: string; role: Role; content: string; reasoning?: string };
-type ChatResult = { ok: boolean; error?: string; answer?: string; reasoning?: string; upstreamToolCallCount?: number };
+type Message = { id: string; role: Role; content: string; reasoning?: string; modelName?: string };
+type ChatResult = { ok: boolean; error?: string; answer?: string; reasoning?: string; upstreamToolCallCount?: number; modelName?: string };
 type AiModel = { id: number; name: string; vision: boolean; online: boolean; thinking: boolean };
 type ModelsResult = { ok: boolean; error?: string; models?: AiModel[]; selectedModelId?: number };
 
@@ -77,6 +77,7 @@ export function AiWorkspace() {
         role: "assistant",
         content: result.answer || "",
         reasoning: result.reasoning || "",
+        modelName: result.modelName,
       }]);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "AI 请求失败");
@@ -90,7 +91,7 @@ export function AiWorkspace() {
     <header className="ai-header">
       <div className="ai-brand"><span>✦</span><div><strong>AI 工作台</strong><small>优学院课程 AI · 实验功能</small></div></div>
       <div className="ai-header-actions">
-        <label className="ai-model-select"><span>模型</span><select aria-label="AI 模型" value={modelId} disabled={busy || modelsLoading || models.length === 0} onChange={event => void chooseModel(Number(event.target.value))}>
+        <label className="ai-model-select"><span>首选模型</span><select aria-label="AI 模型" value={modelId} disabled={busy || modelsLoading || models.length === 0} onChange={event => void chooseModel(Number(event.target.value))}>
           {modelsLoading && <option value={modelId}>读取中…</option>}
           {!modelsLoading && models.length === 0 && <option value={modelId}>不可用</option>}
           {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
@@ -110,6 +111,7 @@ export function AiWorkspace() {
       {messages.map(message => <article key={message.id} className={`ai-message ${message.role}`}>
         <div className="ai-avatar">{message.role === "user" ? "你" : "✦"}</div>
         <div className="ai-bubble">
+          {message.modelName && <small>{message.modelName}</small>}
           {message.reasoning && <details><summary>思考过程</summary><pre>{message.reasoning}</pre></details>}
           {message.role === "assistant" ? <SafeMarkdown source={message.content}/> : <p>{message.content}</p>}
         </div>

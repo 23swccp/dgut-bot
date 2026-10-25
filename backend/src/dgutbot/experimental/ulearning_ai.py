@@ -89,6 +89,10 @@ def parse_event_stream(lines: Iterable[str | bytes]) -> Iterator[ChatChunk]:
         if line == "[DONE]":
             yield ChatChunk(done=True)
             continue
+        # 上游额度耗尽时仍回 SSE，但 data 是固定业务提示而非 JSON。
+        # 只透传已实测的窄格式，不把任意非 JSON 正文（可能含凭据）放入异常。
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}每日token数或联网搜索次数已用完", line):
+            raise UlearningAiError(line)
         try:
             payload = json.loads(line)
         except json.JSONDecodeError as error:

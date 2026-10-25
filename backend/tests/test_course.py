@@ -21,12 +21,19 @@ from dgutbot.course.yxy_course import (
 
 
 class CourseConfigTests(unittest.TestCase):
+    def test_removed_placeholder_mode_is_rejected(self):
+        with self.assertRaises(ValueError):
+            CourseConfig(quiz_mode="fixed")
+
     def test_config_serializes_supported_controls_only(self):
         config = CourseConfig(playback_rate=4.0, document_scroll_speed=2.0)
         values = json.loads(config.to_js())
         self.assertEqual(values["playback_rate"], 4.0)
         self.assertEqual(values["document_scroll_speed"], 2.0)
-        self.assertEqual(values["quiz_blank_text"], ",")
+        self.assertEqual(values["quiz_mode"], "ai")
+        self.assertNotIn("quiz_blank_text", values)
+        self.assertNotIn("quiz_option_label", values)
+        self.assertNotIn("quiz_judgment_label", values)
         self.assertNotIn("auto_answer", values)
         self.assertNotIn("mouse_interval_min", values)
         self.assertNotIn("mouse_interval_max", values)
@@ -226,23 +233,65 @@ class InjectScriptTests(unittest.TestCase):
         handler.assert_not_called()
         self.assertFalse(controller._quiz_busy)
 
-    def test_ai_fallback_uses_fixed_answers_once_and_stops_on_action_failure(self):
+    def test_ai_failure_stops_without_page_actions_or_submission(self):
         controller = CourseController(lambda *_: None)
         controller._active_config = CourseConfig(quiz_mode="ai")
         controller._session_id = "session"
         controller._running = True
         controller._quiz_busy = True
         controller._ai_answer_provider = Mock()
-        controller._ai_answer_provider.answer.return_value = {"state": "fallback", "reason": "invalid JSON"}
+        controller._ai_answer_provider.answer.return_value = {"state": "failed", "reason": "invalid JSON"}
         controller.eval_js = Mock(return_value=True)
         controller.stop = Mock()
         handler = Mock()
-        handler.answer_all.return_value = {"done": 1, "skipped": 0, "failed": 1, "modals": 0}
+        controller.action_executor.execute_click = Mock()
+        controller.action_executor.insert_text = Mock()
+        controller._emit_event = Mock()
         with patch('yxy_course.QuizHandler', return_value=handler):
             controller._run_quiz_handler()
-        handler.answer_all.assert_called_once()
+        controller.action_executor.execute_click.assert_not_called()
+        controller.action_executor.insert_text.assert_not_called()
+        controller._emit_event.assert_not_called()
         controller.stop.assert_called_once()
         self.assertFalse(controller._quiz_busy)
+
+    def test_old_ai_worker_cannot_stop_restarted_session(self):
+        controller = CourseController(lambda *_: None)
+        controller._active_config = CourseConfig(quiz_mode="ai")
+        controller._session_id = "old"
+        controller._running = True
+        controller._quiz_busy = True
+        controller.eval_js = Mock(return_value=True)
+        controller.stop = Mock()
+        controller._ai_answer_provider = Mock()
+
+        def restart(*_args):
+            controller._session_id = "new"
+            return {"state": "failed", "reason": "invalid JSON"}
+
+        controller._ai_answer_provider.answer.side_effect = restart
+        handler = Mock()
+        with patch('yxy_course.QuizHandler', return_value=handler):
+            controller._run_quiz_handler()
+        controller.stop.assert_not_called()
+        self.assertTrue(controller._quiz_busy)
+
+    def test_ai_skip_stops_without_claiming_submission(self):
+        events = []
+        controller = CourseController(lambda *args: events.append(args))
+        controller._active_config = CourseConfig(quiz_mode="ai")
+        controller._session_id = "session"
+        controller._running = True
+        controller.eval_js = Mock(return_value=True)
+        controller.stop = Mock()
+        controller._emit_event = Mock()
+        controller._ai_answer_provider = Mock()
+        controller._ai_answer_provider.answer.return_value = {"state": "skipped", "reason": "当前题型未启用"}
+        with patch('yxy_course.QuizHandler') as handler:
+            controller._run_quiz_handler()
+        controller.stop.assert_called_once()
+        controller._emit_event.assert_not_called()
+        self.assertTrue(any("当前题型未启用" in args[0] for args in events))
 
     def test_script_observes_video_and_completion_state(self):
         self.assertIn("loadedmetadata", INJECT_JS)
