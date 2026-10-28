@@ -65,6 +65,7 @@ function stateBadgeClass(item: HomeworkItem): string {
 }
 
 export function HomeworkInputPanel() {
+  const [section, setSection] = useState<"list" | "input">("list");
   const [text, setText] = useState("");
   const [status, setStatus] = useState<HomeworkStatus>({ state: "checking", message: "正在识别作业输入框…" });
   const [scan, setScan] = useState<HomeworkScanStatus>(emptyScan);
@@ -247,7 +248,11 @@ export function HomeworkInputPanel() {
 
   return <section className="settings-page homework-page" aria-label="作业">
     <div className="page-intro"><div><h2>作业</h2></div></div>
-    <article className="card homework-scan-card">
+    <div className="homework-section-switch" role="group" aria-label="作业功能">
+      <button type="button" className={section === "list" ? "active" : ""} aria-pressed={section === "list"} onClick={() => setSection("list")}>作业列表</button>
+      <button type="button" className={section === "input" ? "active" : ""} aria-pressed={section === "input"} onClick={() => setSection("input")}>禁止粘贴作业输入</button>
+    </div>
+    <article className="card homework-scan-card" hidden={section !== "list"}>
       <div className="homework-card-head">
         <div><h3>全部作业</h3><p>{summary}</p></div>
         {scan.state === "scanning"
@@ -325,7 +330,7 @@ export function HomeworkInputPanel() {
       {scan.state === "completed" && !visibleGroups.length && <div className="homework-scan-message">{emptyMessage}</div>}
       {scan.failures.length > 0 && <details className="homework-scan-failures"><summary>{scan.failures.length} 门课程扫描失败</summary>{scan.failures.map(item => <p key={`${item.courseId}-${item.courseName}`}>{item.courseName}：{item.reason}</p>)}</details>}
     </article>
-    <article className="card homework-card">
+    <article className="card homework-card" hidden={section !== "input"}>
       <div className="homework-card-title"><h3>禁止粘贴类型作业输入</h3></div>
       <div className="homework-status-line">
         <span className={`homework-status-dot ${status.state}`} aria-hidden="true" />
