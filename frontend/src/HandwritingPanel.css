@@ -1,0 +1,11 @@
+.handwriting-card{padding:26px}
+.handwriting-card textarea{display:block;width:100%;min-height:180px;resize:vertical;padding:17px;border:1px solid #d9e2df;border-radius:11px;outline:0;color:#263344;font:15px/1.7 "Microsoft YaHei UI",sans-serif}
+.handwriting-card textarea:focus{border-color:#19a66b;box-shadow:0 0 0 3px #1ca66a1c}
+.handwriting-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+.handwriting-actions span{margin-right:auto;color:#889395;font-size:12px}
+.handwriting-actions button{margin:0}
+.handwriting-preview{margin-top:24px}
+.handwriting-preview[hidden]{display:none}
+.handwriting-preview h4{margin-bottom:10px;color:#374458}
+.handwriting-preview canvas{display:block;width:100%;height:auto;border:1px solid #dfe8e3;border-radius:8px}
+@media(max-width:720px){.handwriting-card{padding:20px}}
