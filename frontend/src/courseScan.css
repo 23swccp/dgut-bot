@@ -18,3 +18,13 @@
 .lesson-open-phase,.lesson-scan-message{display:flex;align-items:center;gap:9px;margin:0 8px 10px 0;padding:10px 13px;border-radius:8px;color:#506071;background:#eaf4ef;font-size:12px}.lesson-open-phase.warning,.lesson-scan-message.warning{color:#925129;background:#fff1e4}.lesson-open-phase span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lesson-failures{flex:none;padding:8px 4px 0;color:#8a5a39;font-size:12px}.lesson-failures p{margin:4px 0}
 @media(max-width:1050px){.lesson-row,.lesson-row.unavailable{grid-template-columns:minmax(220px,1fr) 60px 60px}.lesson-row>i{display:none}}
 @media(max-width:720px){.learning-flow{padding:18px 14px 10px 38px}.learning-flow::before{left:18px}.learning-search-line::after,.lesson-scan-head::after{left:-20px;width:20px}.learning-search-line>i{left:-32px}.lesson-search{padding-left:8px;font-size:14px}.lesson-scan-head{align-items:flex-start;gap:8px}.lesson-scan-summary{align-items:flex-start!important;flex-direction:column;gap:2px!important}.lesson-scan-actions{gap:4px!important}.secondary.compact{margin-left:0;padding:6px 8px}.lesson-row,.lesson-row.unavailable{grid-template-columns:minmax(0,1fr) 58px;gap:8px}.lesson-row>em,.lesson-row>i{display:none}}
+
+.course-page{height:100%;min-height:0;display:flex;flex-direction:column;border:1px solid #e2e5eb;border-radius:10px;background:#f5f7f9;overflow:hidden}
+.sidebar-open .course-page{border-radius:0 10px 10px 0}
+.course-section-switch{display:flex;gap:8px;flex:none;padding:18px 24px 12px}
+.course-section-switch button{padding:9px 16px;border:1px solid #dbe5e0;border-radius:9px;background:#fff;color:#50655a;font-size:14px;font-weight:600;cursor:pointer}
+.course-section-switch button.active{border-color:#19a66b;background:#eaf8f0;color:#087647}
+.course-section-switch button:focus-visible{outline:2px solid #19a66b;outline-offset:2px}
+.course-page>.learning-terminal{flex:1;min-height:0;height:auto;border:0;border-radius:0;box-shadow:none}
+.course-page>.course-export-body{flex:1;min-height:0;padding:20px 28px 34px}
+.course-page>[hidden]{display:none}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, FolderDown, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
 import {
   formatClock, mergeEvents, visibleCourseEvents,
   type CourseEvent, type CourseStatus,
@@ -21,7 +21,7 @@ import { filterLessonGroups, lessonProgress, openPhaseLabel, type CourseScanStat
 import "./courseScan.css";
 import "./homeworkInput.css";
 
-type Page = "terminal" | "learning" | "courseware" | "homework" | "logs" | "settings" | "about";
+type Page = "terminal" | "learning" | "homework" | "logs" | "settings" | "about";
 type Phase = "ready" | "login" | "courses" | "classrooms" | "selected" | "monitoring";
 type LoginStatus = { authenticated: boolean; displayName: string; accountName: string; userId: number | null; greeting: string };
 type Course = { id: number; name: string; teacherName: string };
@@ -34,7 +34,6 @@ const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
   terminal: ClipboardCheck,
   learning: BookOpenCheck,
-  courseware: FolderDown,
   homework: PenLine,
   logs: ScrollText,
   settings: Settings,
@@ -54,6 +53,8 @@ function classroomChoices(rooms?: Classroom[]): SignChoice[] {
 function App() {
   const [page, setPage] = useState<Page>("terminal");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [courseSection, setCourseSection] = useState<"learning" | "export">("learning");
+  const [exportVisited, setExportVisited] = useState(false);
   const reduceMotion = useReducedMotion();
   const [phase, setPhase] = useState<Phase>("ready");
   const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null);
@@ -134,11 +135,11 @@ function App() {
   useEffect(() => { setLessonCursorId(""); }, [lessonQuery]);
   useEffect(() => {
     if (busy) return;
-    const target = page === "terminal" ? commandRef : page === "learning" ? learningCommandRef : null;
+    const target = page === "terminal" ? commandRef : page === "learning" && courseSection === "learning" ? learningCommandRef : null;
     if (!target) return;
     const frame = requestAnimationFrame(() => target.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [page, busy]);
+  }, [page, courseSection, busy]);
   useEffect(() => {
     void call("get_app_info").then(result => { if (result.ok && result.info) setAppInfo(result.info); });
     void call("get_settings").then(result => {
@@ -488,8 +489,8 @@ function App() {
     if (!opened) { setNotice("浏览器拦截了 AI 工作台窗口，请允许本站打开新窗口"); return; }
     try { opened.opener = null; opened.focus(); } catch { /* 页面仍已由浏览器打开。 */ }
   }
-  const navItems: Page[] = ["terminal", "learning", "homework", "courseware", "logs", "settings", "about"];
-  const labels: Record<Page, string> = { terminal: "课程签到", learning: "刷课", courseware: "课件导出", homework: "作业", logs: "运行日志", settings: "设置", about: "关于" };
+  const navItems: Page[] = ["terminal", "learning", "homework", "logs", "settings", "about"];
+  const labels: Record<Page, string> = { terminal: "课程签到", learning: "课件", homework: "作业", logs: "运行日志", settings: "设置", about: "关于" };
   const displayedSignEvents = signEvents.map(signEventView);
   const signCourseName = signStatus.courseName || selectedSignCourse?.name || "尚未选择课程";
   const lastCheckMs = signStatus.lastCheck ? new Date(signStatus.lastCheck).getTime() : 0;
@@ -520,7 +521,12 @@ function App() {
       </AnimatePresence>
       <div className="workspace-content">
       {page === "terminal" && <SignUnavailablePage />}
-      {page === "learning" && <section className="terminal learning-terminal">
+      {page === "learning" && <section className="course-page" aria-label="课件">
+        <div className="course-section-switch" role="group" aria-label="课件功能">
+          <button type="button" className={courseSection === "learning" ? "active" : ""} aria-pressed={courseSection === "learning"} onClick={() => setCourseSection("learning")}>刷课</button>
+          <button type="button" className={courseSection === "export" ? "active" : ""} aria-pressed={courseSection === "export"} onClick={() => { setExportVisited(true); setCourseSection("export"); }}>课件导出</button>
+        </div>
+        <section className="terminal learning-terminal" hidden={courseSection !== "learning"}>
         <div className="learning-flow" aria-label="未完成课件">
           <div className="lesson-scan-head"><div className="lesson-scan-summary"><strong>未完成课件</strong><span>
             {courseScan.state === "scanning" ? `扫描中 ${courseScan.scannedCourses} / ${courseScan.totalCourses}` :
@@ -562,11 +568,12 @@ function App() {
             {courseScan.failures.length > 0 && <details className="lesson-failures"><summary>{courseScan.failures.length} 门课程扫描失败</summary>{courseScan.failures.map(item => <p key={`${item.courseId}-${item.courseName}`}>{item.courseName}：{item.reason}</p>)}</details>}
           </>}
         </div>
+        </section>
+        {exportVisited && <div className="settings-body course-export-body" hidden={courseSection !== "export"}><CoursewareExportPanel courses={courseChoices} onRefresh={refreshExportCourses} isVisible={courseSection === "export"} /></div>}
       </section>}
       {page !== "terminal" && page !== "learning" && <div className={`settings-body ${page === "about" ? "about-settings-body" : ""}`}>
       {page === "homework" && <HomeworkInputPanel />}
       {page === "logs" && <LogPanel call={call} />}
-      {page === "courseware" && <CoursewareExportPanel courses={courseChoices} onRefresh={refreshExportCourses} />}
       {page === "settings" && <SettingsPanel config={config} call={call} writer={settingsWriter} onSaved={loadConfig} monitoring={signStatus.running || Boolean(signStatus.recoveryPending)}>
         <UpdateSettings status={updateStatus} version={appInfo?.version || ""} onCheck={() => { updateDialog.show(); void checkUpdate(); }} onOpen={updateDialog.show}/>
       </SettingsPanel>}

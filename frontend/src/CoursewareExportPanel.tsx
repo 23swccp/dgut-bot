@@ -35,7 +35,7 @@ function groupBySemester(courses: SemesterCourse[], grouped: boolean): Group[] {
   return [...groups.values()].sort((left, right) => right.items[0].semester.order - left.items[0].semester.order);
 }
 
-export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportCourse[]; onRefresh: () => Promise<string> }) {
+export function CoursewareExportPanel({ courses, onRefresh, isVisible = true }: { courses: ExportCourse[]; onRefresh: () => Promise<string>; isVisible?: boolean }) {
   const [current] = useState(currentSemester);
   const [term, setTerm] = useState(() => {
     try {
@@ -95,8 +95,8 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
   }
 
   useEffect(() => {
-    checkListScroll();
-  }, [visible, groups]);
+    if (isVisible) checkListScroll();
+  }, [visible, groups, isVisible]);
 
   useEffect(() => {
     setLastClickedIndex(null);
@@ -104,6 +104,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (!isVisible) return;
       if (event.key === "/" && document.activeElement !== searchInputRef.current) {
         const tagName = (document.activeElement?.tagName || "").toLowerCase();
         if (tagName !== "input" && tagName !== "textarea" && !(document.activeElement as HTMLElement)?.isContentEditable) {
@@ -121,7 +122,7 @@ export function CoursewareExportPanel({ courses, onRefresh }: { courses: ExportC
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [query]);
+  }, [query, isVisible]);
 
   useEffect(() => {
     let disposed = false;
