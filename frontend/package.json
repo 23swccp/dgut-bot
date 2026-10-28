@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "lucide-react": "^1.45.0",
     "mermaid": "11.17.2",
     "motion": "^13.1.1",

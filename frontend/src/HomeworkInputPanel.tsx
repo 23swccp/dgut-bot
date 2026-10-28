@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { HandwritingPanel } from "./HandwritingPanel";
 import { HomeworkReviewPanel } from "./HomeworkReviewPanel";
 import {
   defaultExpandedCourseIds,
@@ -66,6 +67,7 @@ function stateBadgeClass(item: HomeworkItem): string {
 
 export function HomeworkInputPanel() {
   const [section, setSection] = useState<"list" | "input">("list");
+  const [writingSection, setWritingSection] = useState<"input" | "handwriting">("input");
   const [text, setText] = useState("");
   const [status, setStatus] = useState<HomeworkStatus>({ state: "checking", message: "正在识别作业输入框…" });
   const [scan, setScan] = useState<HomeworkScanStatus>(emptyScan);
@@ -250,7 +252,7 @@ export function HomeworkInputPanel() {
     <div className="page-intro"><div><h2>作业</h2></div></div>
     <div className="homework-section-switch" role="group" aria-label="作业功能">
       <button type="button" className={section === "list" ? "active" : ""} aria-pressed={section === "list"} onClick={() => setSection("list")}>作业列表</button>
-      <button type="button" className={section === "input" ? "active" : ""} aria-pressed={section === "input"} onClick={() => setSection("input")}>禁止粘贴作业输入</button>
+      <button type="button" className={section === "input" ? "active" : ""} aria-pressed={section === "input"} onClick={() => setSection("input")}>写作业</button>
     </div>
     <article className="card homework-scan-card" hidden={section !== "list"}>
       <div className="homework-card-head">
@@ -330,7 +332,12 @@ export function HomeworkInputPanel() {
       {scan.state === "completed" && !visibleGroups.length && <div className="homework-scan-message">{emptyMessage}</div>}
       {scan.failures.length > 0 && <details className="homework-scan-failures"><summary>{scan.failures.length} 门课程扫描失败</summary>{scan.failures.map(item => <p key={`${item.courseId}-${item.courseName}`}>{item.courseName}：{item.reason}</p>)}</details>}
     </article>
-    <article className="card homework-card" hidden={section !== "input"}>
+    <div className="homework-writing" hidden={section !== "input"}>
+      <div className="homework-writing-switch" role="group" aria-label="写作业功能">
+        <button type="button" className={writingSection === "input" ? "active" : ""} aria-pressed={writingSection === "input"} onClick={() => setWritingSection("input")}>作业输入</button>
+        <button type="button" className={writingSection === "handwriting" ? "active" : ""} aria-pressed={writingSection === "handwriting"} onClick={() => setWritingSection("handwriting")}>字迹生成器</button>
+      </div>
+    <article className="card homework-card" hidden={writingSection !== "input"}>
       <div className="homework-card-title"><h3>禁止粘贴类型作业输入</h3></div>
       <div className="homework-status-line">
         <span className={`homework-status-dot ${status.state}`} aria-hidden="true" />
@@ -344,5 +351,7 @@ export function HomeworkInputPanel() {
       {result && <p className={`homework-result ${result.good ? "good" : "error"}`} role="status">{result.message}</p>}
       <p className="homework-note">追加输入后，请在作业页面核对并提交。</p>
     </article>
+    <div hidden={writingSection !== "handwriting"}><HandwritingPanel /></div>
+    </div>
   </section>;
 }

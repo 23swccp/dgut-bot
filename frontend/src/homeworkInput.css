@@ -67,3 +67,9 @@
 .homework-archive-item{margin:0;padding:6px 9px;border:1px solid #d9e4df;border-radius:8px;background:#fff;color:#60746a;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .homework-archive-item:hover{border-color:#c2d7cc;background:#f5faf7}
 .homework-archive-item:focus-visible{outline:2px solid #19a66b;outline-offset:1px}
+
+.homework-writing[hidden],.homework-writing>div[hidden]{display:none}
+.homework-writing-switch{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid #dce7e1}
+.homework-writing-switch button{margin:0;padding:10px 16px;border:0;border-bottom:2px solid transparent;background:transparent;color:#60746a;font-size:13px;font-weight:600;cursor:pointer}
+.homework-writing-switch button.active{border-bottom-color:#19a66b;color:#087647}
+.homework-writing-switch button:focus-visible{outline:2px solid #19a66b;outline-offset:-2px}
