@@ -23,7 +23,7 @@ from websocket import create_connection
 
 from dgutbot.app.browser_paths import (
     BROWSER_INSTALLATIONS, browser_scan_roots, extra_browser_candidates,
-    normalize_browser_path, resolve_browser_path, scan_browser_directory,
+    is_browseros_neo, normalize_browser_path, resolve_browser_path, scan_browser_directory,
 )
 from dgutbot.domain.course_scan import (
     AuthRequiredError, CourseScanService, DirectorySampleRequired, ScanCancelled,
@@ -1683,6 +1683,7 @@ class SignBackend:
     def _start_browser_impl(self, url: str = "") -> bool:
         url = url.strip()
         if url and self._open_debug_tab(url):
+            self._warn_existing_neo_port_mismatch()
             return True
         path, name = self.find_browser()
         if not path:
@@ -1692,6 +1693,9 @@ class SignBackend:
         self._log(f"正在以远程调试模式启动 {name}…", "info")
         debug_profile = self.root / "browser_profile"
         command = [path, f"--remote-debugging-port={port}", "--remote-allow-origins=*", f"--user-data-dir={debug_profile}", "--no-first-run", "--no-default-browser-check"]
+        if is_browseros_neo(path, name or ""):
+            # neo 的 MCP 服务使用独立的 CDP 设置，必须与小皮卡指定的调试端口一致。
+            command.append(f"--browseros-cdp-port={port}")
         if url:
             command.append(url)
         try:
@@ -1710,6 +1714,18 @@ class SignBackend:
         self.save_config()
         self._log(f"已启动 {name}。请自行进入优学院并完成登录后回到本程序。", "success")
         return True
+
+    def _warn_existing_neo_port_mismatch(self) -> None:
+        """复用旧 neo 时无法更改其启动参数，提示用户自行重启浏览器。"""
+        if not is_browseros_neo(self.config.browser_path, self.config.browser_name):
+            return
+        try:
+            data = json.loads((self.root / "browser_profile" / ".browseros" / "config.json").read_text(encoding="utf-8"))
+            cdp_port = data.get("ports", {}).get("cdp")
+        except (OSError, ValueError, AttributeError, TypeError):
+            return
+        if type(cdp_port) is int and 1024 <= cdp_port <= 65535 and cdp_port != int(self.config.debug_port):
+            self._log("当前 neo 浏览器仍使用旧的 MCP 调试端口；请关闭小皮卡启动的浏览器后重新打开。", "warn")
 
     def _open_debug_tab(self, url: str) -> bool:
         """调试浏览器已运行时，在同一配置中新增标签页而不是关闭所有窗口。"""
