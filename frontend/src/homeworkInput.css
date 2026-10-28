@@ -1,4 +1,10 @@
 .homework-page{max-width:920px}
+.homework-page .card[hidden]{display:none}
+.homework-section-switch{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.homework-section-switch button{padding:10px 16px;border:1px solid #dbe5e0;border-radius:10px;background:#fff;color:#50655a;font-size:14px;font-weight:600;cursor:pointer}
+.homework-section-switch button:hover{border-color:#a8d4be;color:#087647}
+.homework-section-switch button.active{border-color:#19a66b;background:#eaf8f0;color:#087647}
+.homework-section-switch button:focus-visible{outline:2px solid #19a66b;outline-offset:2px}
 .homework-card{padding:26px}
 .homework-card-title{margin-bottom:18px}.homework-card-title p{margin-top:4px}
 .homework-scan-card{padding:24px 26px}.homework-card-head{display:flex;align-items:center;justify-content:space-between;gap:18px}.homework-card-head p{margin-top:4px}.homework-card-head .secondary{flex:none;margin:0}
