@@ -1,11 +1,23 @@
+@font-face{font-family:hw-xiaolai;src:url('/handwriting-fonts/xiaolai.woff2') format('woff2');font-display:swap}
+@font-face{font-family:hw-longcang;src:url('/handwriting-fonts/longcang.woff2') format('woff2');font-display:swap}
+@font-face{font-family:hw-cef;src:url('/handwriting-fonts/cef.woff2') format('woff2');font-display:swap}
+@font-face{font-family:hw-maoken;src:url('/handwriting-fonts/maoken.woff2') format('woff2');font-display:swap}
 .handwriting-card{padding:26px}
-.handwriting-card textarea{display:block;width:100%;min-height:180px;resize:vertical;padding:17px;border:1px solid #d9e2df;border-radius:11px;outline:0;color:#263344;font:15px/1.7 "Microsoft YaHei UI",sans-serif}
-.handwriting-card textarea:focus{border-color:#19a66b;box-shadow:0 0 0 3px #1ca66a1c}
-.handwriting-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
-.handwriting-actions span{margin-right:auto;color:#889395;font-size:12px}
-.handwriting-actions button{margin:0}
-.handwriting-preview{margin-top:24px}
-.handwriting-preview[hidden]{display:none}
-.handwriting-preview h4{margin-bottom:10px;color:#374458}
-.handwriting-preview canvas{display:block;width:100%;height:auto;border:1px solid #dfe8e3;border-radius:8px}
-@media(max-width:720px){.handwriting-card{padding:20px}}
+.handwriting-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+.handwriting-editor textarea{display:block;box-sizing:border-box;width:100%;min-height:470px;resize:vertical;padding:16px;border:1px solid #d9e2df;border-radius:11px;outline:0;color:#263344;font:15px/1.7 "Microsoft YaHei UI",sans-serif}
+.handwriting-editor textarea:focus{border-color:#19a66b;box-shadow:0 0 0 3px #1ca66a1c}
+.handwriting-count{display:block;margin-top:8px;color:#889395;font-size:12px;text-align:right}
+.handwriting-output{min-width:0}.handwriting-output-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;color:#374458}.handwriting-output-head button{display:inline-flex;align-items:center;gap:5px;margin:0}
+.handwriting-preview{display:grid;place-items:center;min-height:300px;background:#edf1ef;border:1px solid #dfe8e3;border-radius:8px;overflow:hidden}
+.handwriting-preview p{padding:20px;color:#88958e;font-size:13px}.handwriting-preview canvas{display:block;width:100%;height:auto}.handwriting-preview canvas[hidden]{display:none}
+.handwriting-pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px;color:#52675d}.handwriting-pagination button{margin:0}
+.handwriting-hint{margin-top:10px;color:#86612f;font-size:12px;overflow-wrap:anywhere}
+.handwriting-export{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-top:14px}.handwriting-export button{margin:0}.handwriting-export label{margin-right:auto;color:#53645b;font-size:12px}
+.handwriting-export select,.handwriting-settings select{padding:7px 9px;border:1px solid #d6e0db;border-radius:7px;background:#fff;color:#273a30}
+.handwriting-dialog{box-sizing:border-box;width:min(520px,calc(100% - 32px));max-height:calc(100% - 32px);padding:22px;border:1px solid #dce7e1;border-radius:14px;color:#263b32;box-shadow:0 16px 55px #16271d40}
+.handwriting-dialog::backdrop{background:#17251e66}.handwriting-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.handwriting-dialog-head button{margin:0}
+.handwriting-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:20px}.handwriting-settings>label{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:600}.handwriting-settings input[type=color]{width:60px;height:34px;padding:2px;border:1px solid #d6e0db;border-radius:7px;background:white}
+.handwriting-slider{display:flex;align-items:center;gap:8px}.handwriting-slider input{min-width:0;flex:1;accent-color:#19a66b}.handwriting-slider output{min-width:30px;text-align:right;font-weight:400}
+.handwriting-dialog-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:20px}.handwriting-dialog-actions button{margin:0}
+@media(max-width:720px){.handwriting-card{padding:20px}.handwriting-workspace{grid-template-columns:1fr}.handwriting-editor textarea{min-height:220px}.handwriting-settings{grid-template-columns:1fr}}
+@media(min-width:1000px){.handwriting-dialog{position:fixed;top:50%;left:max(16px,calc((100vw - 920px)/2 - 80px));margin:0;transform:translateY(-50%)}}
