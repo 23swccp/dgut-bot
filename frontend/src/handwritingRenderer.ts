@@ -36,7 +36,7 @@ export function renderPage(canvas: HTMLCanvasElement, glyphs: Glyph[], settings:
     for (let i = 0; i < 650; i++) ctx.fillRect(random(seed, i, 21) * PAGE_WIDTH, random(seed, i, 22) * PAGE_HEIGHT, 1, 1);
   }
   if (settings.paper !== "blank") {
-    ctx.strokeStyle = settings.scan === "clear" ? "#c4c4c4" : "#d5dfe1"; ctx.lineWidth = 1;
+    ctx.strokeStyle = settings.scan === "clear" ? "#858585" : "#899da1"; ctx.lineWidth = 1.75;
     for (let row = 0; row < layout.rowsPerPage; row++) { const y = settings.margin + (row + 1) * layout.lineHeight; ctx.beginPath(); ctx.moveTo(settings.margin, y); ctx.lineTo(PAGE_WIDTH-settings.margin, y); ctx.stroke(); }
     if (settings.paper === "grid") for (let x = settings.margin; x <= PAGE_WIDTH-settings.margin; x += layout.lineHeight) { ctx.beginPath(); ctx.moveTo(x, settings.margin); ctx.lineTo(x, PAGE_HEIGHT-settings.margin); ctx.stroke(); }
   }
