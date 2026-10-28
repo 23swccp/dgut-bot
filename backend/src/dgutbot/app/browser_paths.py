@@ -48,6 +48,16 @@ BROWSER_INSTALLATION_ALIASES = {
 }
 
 
+def is_browseros_neo(path: str, name: str = "") -> bool:
+    """识别 neo 常见安装路径和显式名称；不要把普通 chrome.exe 误认为 neo。"""
+    parts = str(path).replace("\\", "/").casefold().split("/")
+    return (
+        any(part in {"browserclaw", "browseros neo"} for part in parts)
+        or (parts[-1] if parts else "") in {"browseros.exe", "browserclaw.exe"}
+        or name.strip().casefold() in {"browseros neo", "browserclaw"}
+    )
+
+
 def scan_browser_directory(
     root: Path,
     executables: tuple[str, ...],

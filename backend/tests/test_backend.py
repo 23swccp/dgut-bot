@@ -546,6 +546,55 @@ class BackendTests(unittest.TestCase):
             self.assertIn("--remote-debugging-port=9222", command)
             self.assertIn(url, command)
 
+    def test_neo_launch_keeps_mcp_and_app_on_the_configured_debug_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "BrowserClaw" / "Application" / "chrome.exe"
+            browser.parent.mkdir(parents=True)
+            browser.touch()
+            backend = self.make_backend(root)
+            backend.config.browser_name = "自定义浏览器"
+            backend.config.browser_path = str(browser)
+            backend.config.debug_port = 19334
+            with patch.object(backend, "_open_debug_tab", return_value=False), patch("yxy_backend.subprocess.Popen") as popen:
+                self.assertTrue(backend.start_browser("http://127.0.0.1:1420"))
+            command = popen.call_args.args[0]
+            self.assertIn("--remote-debugging-port=19334", command)
+            self.assertIn("--browseros-cdp-port=19334", command)
+            self.assertIn(f"--user-data-dir={root / 'browser_profile'}", command)
+            self.assertEqual(backend.config.debug_port, 19334)
+
+    def test_normal_chrome_does_not_get_neo_specific_argument(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "Google" / "Chrome" / "chrome.exe"
+            browser.parent.mkdir(parents=True)
+            browser.touch()
+            backend = self.make_backend(root)
+            backend.config.browser_path = str(browser)
+            with patch.object(backend, "_open_debug_tab", return_value=False), patch("yxy_backend.subprocess.Popen") as popen:
+                self.assertTrue(backend.start_browser("http://127.0.0.1:1420"))
+            self.assertFalse(any(arg.startswith("--browseros-cdp-port=") for arg in popen.call_args.args[0]))
+
+    def test_reusing_old_neo_browser_warns_when_mcp_port_differs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messages = []
+            backend = SignBackend(lambda text, kind, module="": messages.append((text, kind)), root=root)
+            backend.config.browser_path = str(root / "BrowserClaw" / "Application" / "chrome.exe")
+            browser_config = root / "browser_profile" / ".browseros" / "config.json"
+            browser_config.parent.mkdir(parents=True)
+            browser_config.write_text(json.dumps({"ports": {"cdp": 9110}}), encoding="utf-8")
+            with patch.object(backend, "_open_debug_tab", return_value=True), patch("yxy_backend.subprocess.Popen") as popen:
+                self.assertTrue(backend.start_browser("http://127.0.0.1:1420"))
+            popen.assert_not_called()
+            self.assertTrue(any("关闭小皮卡启动的浏览器" in text for text, _ in messages))
+            messages.clear()
+            browser_config.write_text(json.dumps({"ports": {"cdp": 9222}}), encoding="utf-8")
+            with patch.object(backend, "_open_debug_tab", return_value=True):
+                self.assertTrue(backend.start_browser("http://127.0.0.1:1420"))
+            self.assertFalse(any("旧的 MCP 调试端口" in text for text, _ in messages))
+
     def test_automatic_login_probe_is_quiet_and_non_blocking_while_waiting(self):
         with tempfile.TemporaryDirectory() as directory:
             messages = []
