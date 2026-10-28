@@ -1,16 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import { Filter } from "lucide-react";
-import { zipSync } from "fflate";
-import { DEFAULT_SETTINGS, FONT_NAMES, layoutText, renderPage, type FontKey, type Layout, type Settings } from "./handwritingRenderer";
+import { strToU8, zipSync } from "fflate";
+import { DEFAULT_SETTINGS, FONT_NAMES, PAPER_PHOTOS, isPhotoPaper, layoutText, renderPage, type FontKey, type Layout, type Paper, type Settings } from "./handwritingRenderer";
 import "./HandwritingPanel.css";
 
-type Snapshot = { settings: Settings; seed: number; layout: Layout; missing: string[] };
+type Snapshot = { settings: Settings; seed: number; layout: Layout; missing: string[]; paperImage: HTMLImageElement | null };
 type Coverage = Record<FontKey, number[]>;
 const fonts = Object.keys(FONT_NAMES) as FontKey[];
 let coveragePromise: Promise<Coverage> | undefined;
 function coverage(): Promise<Coverage> {
   if (!coveragePromise) coveragePromise = fetch("/handwriting-fonts/coverage.json").then(response => { if (!response.ok) throw new Error("无法读取字体字库信息"); return response.json() as Promise<Coverage>; }).catch(error => { coveragePromise = undefined; throw error; });
   return coveragePromise;
+}
+const paperImages = new Map<Paper, Promise<HTMLImageElement>>();
+function loadPaper(paper: Paper): Promise<HTMLImageElement | null> {
+  if (!isPhotoPaper(paper)) return Promise.resolve(null);
+  const cached = paperImages.get(paper);
+  if (cached) return cached;
+  const result = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("纸张背景加载失败，请重新选择背景。"));
+    image.src = PAPER_PHOTOS[paper];
+  }).catch(error => { paperImages.delete(paper); throw error; });
+  paperImages.set(paper, result);
+  return result;
 }
 function save(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -41,7 +55,7 @@ export function HandwritingPanel() {
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const [, , known] = await Promise.all([document.fonts.load(`38px "hw-${settings.font}"`), document.fonts.load('38px "hw-xiaolai"'), coverage()]);
+          const [, , known, paperImage] = await Promise.all([document.fonts.load(`38px "hw-${settings.font}"`), document.fonts.load('38px "hw-xiaolai"'), coverage(), loadPaper(settings.paper)]);
           if (cancelled) return;
           const canvas = document.createElement("canvas"); const ctx = canvas.getContext("2d");
           if (!ctx) throw new Error("无法创建预览，请重试。");
@@ -52,7 +66,7 @@ export function HandwritingPanel() {
           const missing = [...new Set(Array.from(text).filter(char => !/\s/u.test(char) && !selected.has(char.codePointAt(0)!)))];
           const unavailable = missing.filter(char => !fallback.has(char.codePointAt(0)!));
           if (unavailable.length) throw new Error(`所选字体及备用字体缺少：${unavailable.slice(0,30).join(" ")}，请修改文字后重试。`);
-          setSnapshot({ settings, seed, layout, missing });
+          setSnapshot({ settings, seed, layout, missing, paperImage });
           setPage(old => Math.min(old, layout.pages.length - 1));
         } catch (e) { if (!cancelled) { setSnapshot(null); setError(e instanceof Error ? e.message : String(e)); } }
         finally { if (!cancelled) setWorking(false); }
@@ -63,7 +77,7 @@ export function HandwritingPanel() {
 
   useEffect(() => {
     if (!snapshot || !canvasRef.current) return;
-    try { renderPage(canvasRef.current, snapshot.layout.pages[page] || [], snapshot.settings, snapshot.seed, snapshot.layout); }
+    try { renderPage(canvasRef.current, snapshot.layout.pages[page] || [], snapshot.settings, snapshot.seed, snapshot.layout, snapshot.paperImage); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [snapshot, page]);
 
@@ -74,14 +88,18 @@ export function HandwritingPanel() {
       const indexes = all ? snapshot.layout.pages.map((_, i) => i) : [page];
       const ext = format === "jpeg" ? "jpg" : "png";
       if (indexes.length === 1) {
-        const canvas = document.createElement("canvas"); renderPage(canvas, snapshot.layout.pages[indexes[0]], snapshot.settings, snapshot.seed, snapshot.layout);
+        const canvas = document.createElement("canvas"); renderPage(canvas, snapshot.layout.pages[indexes[0]], snapshot.settings, snapshot.seed, snapshot.layout, snapshot.paperImage);
         save(await encode(canvas, format), `字迹-${indexes[0]+1}.${ext}`);
       } else {
         const files: Record<string, Uint8Array> = {};
         for (const index of indexes) {
-          const canvas = document.createElement("canvas"); renderPage(canvas, snapshot.layout.pages[index], snapshot.settings, snapshot.seed, snapshot.layout);
+          const canvas = document.createElement("canvas"); renderPage(canvas, snapshot.layout.pages[index], snapshot.settings, snapshot.seed, snapshot.layout, snapshot.paperImage);
           files[`page-${String(index+1).padStart(3,"0")}.${ext}`] = new Uint8Array(await (await encode(canvas, format)).arrayBuffer());
         }
+        if (snapshot.settings.paper === "wrinkled") files["背景版权说明.txt"] = strToU8(`背景照片：D Sharon Pruitt / Pink Sherbet Photography，CC BY 2.0。来源：https://commons.wikimedia.org/wiki/File:Free_Wrinkled_Lined_Blank_Notebook_Paper_High_Resolution_Creative_Commons_(8077064004).jpg
+授权：https://creativecommons.org/licenses/by/2.0/
+照片已缩放以适应页面。
+`);
         const zip = zipSync(files, { level: 0 }); save(new Blob([zip.buffer as ArrayBuffer], { type: "application/zip" }), "字迹图片.zip");
       }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -104,11 +122,11 @@ export function HandwritingPanel() {
     <dialog className="handwriting-dialog" ref={dialogRef} onClose={() => triggerRef.current?.focus()} aria-labelledby="handwriting-settings-title"><div className="handwriting-dialog-head"><h3 id="handwriting-settings-title">样式设置</h3><button type="button" className="secondary compact" onClick={() => dialogRef.current?.close()}>完成</button></div>
       <div className="handwriting-settings">
         <label>字体<select value={settings.font} onChange={e => update("font", e.target.value as FontKey)}>{fonts.map(font => <option key={font} value={font}>{FONT_NAMES[font]}</option>)}</select></label>
-        <label>纸张<select value={settings.paper} onChange={e => update("paper",e.target.value as Settings["paper"])}><option value="blank">白纸</option><option value="ruled">横线纸</option><option value="grid">方格纸</option></select></label>
+        <label>纸张<select value={settings.paper} onChange={e => update("paper",e.target.value as Settings["paper"])}><option value="blank">白纸</option><option value="ruled">横线纸</option><option value="grid">方格纸</option><option value="notebook">笔记本横线页（照片）</option><option value="wrinkled">褶皱信纸（照片）</option><option value="recycled">再生纸纹理（照片）</option></select></label>
         <label>扫描效果<select value={settings.scan} onChange={e => update("scan",e.target.value as Settings["scan"])}><option value="none">关闭</option><option value="clear">清晰扫描</option><option value="natural">自然扫描</option></select></label>
         <label>墨色<input type="color" value={settings.ink} onChange={e => update("ink",e.target.value)} /></label>
-        {([ ["size","字号",26,54,1], ["spacing","行距",1.3,2.2,.1], ["margin","页边距",45,110,5], ["randomness","随机程度",0,100,5], ["dry","断水程度",0,100,5] ] as const).map(([key,label,min,max,step]) => <label key={key}>{label}<span className="handwriting-slider"><input type="range" min={min} max={max} step={step} value={settings[key]} onChange={e => update(key,Number(e.target.value))} /><output>{settings[key]}</output></span></label>)}
-      </div><div className="handwriting-dialog-actions"><button type="button" className="secondary compact" onClick={() => setSettings(DEFAULT_SETTINGS)}>恢复默认</button><button type="button" className="secondary compact" onClick={() => setSeed(s => (s+1) >>> 0)}>重新生成随机效果</button></div>
+        {([ ["size","字号",26,54,1], ["spacing","行距",1.3,2.2,.1], ["margin","页边距",45,110,5], ["randomness","随机程度",0,100,5], ["dry","断水程度",0,100,5], ["paperWear","纸张线条断痕",0,100,5] ] as const).map(([key,label,min,max,step]) => <label key={key}>{label}<span className="handwriting-slider"><input type="range" min={min} max={max} step={step} value={settings[key]} disabled={key === "paperWear" && (settings.paper === "blank" || settings.paper === "recycled")} onChange={e => update(key,Number(e.target.value))} /><output>{settings[key]}</output></span></label>)}
+      </div>{settings.paper === "wrinkled" && <p className="handwriting-paper-credit">褶皱信纸：<a href="https://commons.wikimedia.org/wiki/File:Free_Wrinkled_Lined_Blank_Notebook_Paper_High_Resolution_Creative_Commons_(8077064004).jpg" target="_blank" rel="noreferrer">D Sharon Pruitt / Pink Sherbet Photography</a>，<a href="https://creativecommons.org/licenses/by/2.0/" target="_blank" rel="noreferrer">CC BY 2.0</a>。分享生成图片时请保留署名和授权链接。</p>}<div className="handwriting-dialog-actions"><button type="button" className="secondary compact" onClick={() => setSettings(DEFAULT_SETTINGS)}>恢复默认</button><button type="button" className="secondary compact" onClick={() => setSeed(s => (s+1) >>> 0)}>重新生成随机效果</button></div>
     </dialog>
   </article>;
 }

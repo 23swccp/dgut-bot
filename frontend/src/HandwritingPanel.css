@@ -21,3 +21,5 @@
 .handwriting-dialog-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:20px}.handwriting-dialog-actions button{margin:0}
 @media(max-width:720px){.handwriting-card{padding:20px}.handwriting-workspace{grid-template-columns:1fr}.handwriting-editor textarea{min-height:220px}.handwriting-settings{grid-template-columns:1fr}}
 @media(min-width:1000px){.handwriting-dialog{position:fixed;top:50%;left:max(16px,calc((100vw - 920px)/2 - 80px));margin:0;transform:translateY(-50%)}}
+
+.handwriting-paper-credit{margin-top:16px;color:#65766d;font-size:12px;line-height:1.6;overflow-wrap:anywhere}.handwriting-paper-credit a{color:#087647}
