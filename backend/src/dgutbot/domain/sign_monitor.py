@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -84,7 +83,6 @@ class SignMonitor:
         token: Callable[[], str],
         user_id: Callable[[], int | None],
         log: Callable[[str, str], None],
-        write_log: Callable[[str, str, list[str]], None],
         recovery_path: Path | None = None,
     ) -> None:
         self._request = request
@@ -93,7 +91,6 @@ class SignMonitor:
         self._token = token
         self._user_id = user_id
         self._log = log
-        self._write_log = write_log
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
         self.thread: threading.Thread | None = None
@@ -280,19 +277,13 @@ class SignMonitor:
         self._last_sign_succeeded = False
         score_type = activity.score_type
         kind = self.kind(score_type)
-        activity_id = activity.relation_id
         code = self.attendance_code(activity) if score_type == 1 else ""
         if score_type not in (0, 1, 2, 3):
             self._log(f"[{course.name}] {kind}：当前类型不支持自动处理，已跳过", "warn")
-            self._write_log(course.name, kind, [
-                f"attendanceID: {activity_id}",
-                "result: skipped",
-                "reason: unsupported scoreType",
-            ])
             return True
         settings = self._settings()
         payload = {
-            "attendanceID": activity_id,
+            "attendanceID": activity.relation_id,
             "classID": classroom_id,
             "userID": self._user_id(),
             "location": f"{settings.lat},{settings.lng}",
@@ -324,14 +315,6 @@ class SignMonitor:
             self._log(f"• [{course.name}] {kind}：已签到过", "muted")
         else:
             self._log(f"× [{course.name}] {kind}：{message}", "warn")
-        self._write_log(course.name, kind, [
-            "transport: direct-python",
-            f"endpoint: {APP_BASE}/newAttendance/signByStu",
-            f"request: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
-            f"HTTP: {http_status}",
-            f"serviceStatus: {status}",
-            f"rawResponse: {raw_response}",
-        ])
         return status in (200, 201, 209)
 
     def poll_once(self, checked: set[str]) -> str:

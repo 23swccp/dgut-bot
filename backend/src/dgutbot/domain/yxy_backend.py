@@ -37,15 +37,11 @@ from dgutbot.domain.homework_export import HOMEWORK_NODE, append_homework_direct
 from dgutbot.domain.homework_scan import HomeworkAuthRequiredError, HomeworkScanService
 from dgutbot.domain.homework_review import build_peer_review_payloads, normalize_homework_review
 from dgutbot.domain.school_auth import IDENTITY_URL, LOGIN_URL, login_headers
-from dgutbot.logs import append_block_with_header, redact, session_header, stamp
+from dgutbot.logs import redact
 from dgutbot.domain.sign_monitor import (
     LMS_BASE, Activity, Classroom, MonitorState, SignMonitor,
 )
 
-
-
-DEFAULT_LOG_NAME = "data.md"
-LEGACY_LOG_NAME = "签到记录.md"
 
 
 @dataclass
@@ -55,8 +51,6 @@ class AppConfig:
     debug_port: int = 9222
     poll_interval: int = 5
     selection_auto_leave: bool = False
-    save_log: bool = True
-    log_path: str = ""
     lat: float = 23.0432
     lng: float = 113.3993
     address: str = "东莞理工学院"
@@ -98,7 +92,7 @@ class AppConfig:
 
     @classmethod
     def from_mapping(cls, values: dict, root: Path) -> "AppConfig":
-        defaults = cls(log_path=str(root / "data.md"))
+        defaults = cls()
         if not isinstance(values, dict):
             values = {}
         merged = asdict(defaults) | {
@@ -108,7 +102,6 @@ class AppConfig:
             debug_port=cls._number(merged["debug_port"], defaults.debug_port, 1024, 65535, integer=True),
             poll_interval=cls._number(merged["poll_interval"], defaults.poll_interval, 2, 3600, integer=True),
             selection_auto_leave=cls._boolean(merged["selection_auto_leave"], defaults.selection_auto_leave),
-            save_log=cls._boolean(merged["save_log"], defaults.save_log),
             campus_login_on_startup=cls._boolean(
                 merged["campus_login_on_startup"], defaults.campus_login_on_startup,
             ),
@@ -131,14 +124,8 @@ class AppConfig:
             merged["course_quiz_blank_enabled"],
         )):
             merged["course_quiz_auto_answer"] = False
-        for key in ("browser_path", "browser_name", "log_path", "address"):
+        for key in ("browser_path", "browser_name", "address"):
             merged[key] = str(merged[key] if merged[key] is not None else getattr(defaults, key))
-        # 旧默认名整体升级为 data.md：日志现在记录完整运行过程，不再只是签到详情。
-        # 只改仍等于旧默认名的取值，用户自己指定的路径保持不动。
-        if Path(merged["log_path"].strip()).name == LEGACY_LOG_NAME:
-            merged["log_path"] = str(Path(merged["log_path"]).with_name(DEFAULT_LOG_NAME))
-        elif not merged["log_path"].strip():
-            merged["log_path"] = defaults.log_path
         merged["browser_path"] = normalize_browser_path(merged["browser_path"])
         return cls(**merged)
 
@@ -491,7 +478,6 @@ class SignBackend:
         self.root = root or Path(__file__).resolve().parents[4]
         self.config_path = self.root / "config.json"
         self.config: AppConfig = self._load_config()
-        self._migrate_legacy_log()
         # 缓存仅在登录读取时验证后恢复，不把磁盘数据直接当作已登录状态。
         self._login_cache_path = self.root / "login-cache.json"
         self.token = ""
@@ -515,7 +501,6 @@ class SignBackend:
             token=lambda: str(self.headers.get("Authorization") or self.token or ""),
             user_id=lambda: self.user_id,
             log=lambda text, kind: self._log(text, kind, "sign"),
-            write_log=self._write_sign_log,
             recovery_path=self.root / "course-recovery.json",
         )
         self._course_controller = None
@@ -647,31 +632,16 @@ class SignBackend:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _resolve_log_path(self, value: str = "") -> Path:
-        path = Path(value.strip() or self.config.log_path).expanduser()
+    def open_log_file(self, value: str = "") -> Path:
+        """只打开已有的手动导出文件，不创建或修改文件。"""
+        if not value.strip():
+            raise ValueError("请先在运行日志页导出日志")
+        path = Path(value.strip()).expanduser()
         if not path.is_absolute():
             path = self.root / path
-        return path.resolve()
-
-    def _migrate_legacy_log(self) -> None:
-        """把旧的签到记录.md 直接改名成 data.md，保留用户已有历史。"""
-        try:
-            path = self._resolve_log_path()
-            if path.name != DEFAULT_LOG_NAME or path.exists():
-                return
-            legacy = path.with_name(LEGACY_LOG_NAME)
-            if legacy.is_file():
-                os.replace(legacy, path)
-        except OSError:
-            pass
-
-    def open_log_file(self, value: str = "") -> Path:
-        """创建并用系统默认程序打开当前日志文件。"""
-        path = self._resolve_log_path(value)
-        if path.exists() and path.is_dir():
-            raise OSError(f"日志路径指向文件夹：{path}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch(exist_ok=True)
+        path = path.resolve()
+        if not path.is_file():
+            raise OSError(f"日志文件不存在或不是文件：{path}")
         if os.name == "nt":
             os.startfile(str(path))
         elif sys.platform == "darwin":
@@ -1596,11 +1566,7 @@ class SignBackend:
         return list(extra_browser_candidates().items())
 
     def _browser_report(self, message: str, progress: Callable[[str], None] | None = None) -> None:
-        try:
-            with (self.root / "browser-detection.log").open("a", encoding="utf-8") as handle:
-                handle.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}\n")
-        except OSError:
-            pass
+        self._log(message, "info", "app")
         if progress:
             progress(message)
 
@@ -1931,18 +1897,6 @@ class SignBackend:
 
     def _request(self, method: str, url: str, **kwargs) -> BrowserResponse:
         return self.api.request(method, url, **kwargs)
-
-    def _write_sign_log(self, course: str, kind: str, details: list[str]) -> None:
-        if not self.config.save_log:
-            return
-        path = self._resolve_log_path()
-        lines = [f"{stamp()} · sign · {redact(course)} · {redact(kind)}\n"]
-        lines.extend(f"  - {redact(item)}\n" for item in details)
-        lines.append("\n")
-        try:
-            append_block_with_header(path, lines, session_header())
-        except OSError:
-            pass
 
     @staticmethod
     def _redact(value: object) -> str:

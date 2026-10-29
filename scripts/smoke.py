@@ -220,7 +220,7 @@ def main(argv: list[str]) -> int:
         check(bool(detected), f"检测到 Chromium 浏览器：{[item['name'] for item in detected]}")
 
         check((smoke_data / "config.json").is_file(), "config.json 写入独立用户数据目录")
-        check((smoke_data / "browser-launcher.log").is_file(), "启动日志写入独立用户数据目录")
+        check(not any((smoke_data / name).exists() for name in ("data.md", "browser-launcher.log", "browser-service.log", "browser-detection.log")), "启动与运行均不自动生成日志文件")
         check(not (release_dir / "config.json").exists(), "Velopack current 目录没有用户配置")
 
         print("关闭服务…")

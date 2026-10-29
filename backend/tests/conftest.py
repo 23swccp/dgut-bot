@@ -6,7 +6,7 @@ import sys
 import tempfile
 
 # 必须先隔离数据目录，再导入任何 dgutbot 模块：commands 在导入时就会读取
-# config.json 并确定日志路径，晚一步设置就会把测试命令写进真实 data.md。
+# config.json 和用户缓存，晚一步设置就可能触碰真实配置与浏览器资料。
 _original_data_dir = os.environ.get("YXY_DATA_DIR")
 _test_data = tempfile.TemporaryDirectory(prefix="dgut-offline-tests-")
 os.environ["YXY_DATA_DIR"] = _test_data.name

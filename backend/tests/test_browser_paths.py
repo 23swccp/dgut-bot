@@ -28,7 +28,8 @@ class BrowserDiscoveryTests(unittest.TestCase):
                 browser = root / relative
                 browser.parent.mkdir(parents=True)
                 browser.touch()
-            backend = SignBackend(lambda *_: None, root=root)
+            messages = []
+            backend = SignBackend(lambda text, *_: messages.append(text), root=root)
             with (
                 patch.dict(os.environ, {
                     "PROGRAMFILES": str(root / "Programs"),
@@ -58,7 +59,8 @@ class BrowserDiscoveryTests(unittest.TestCase):
             browser = root / "Programs/Microsoft/Edge/App/msedge.exe"
             browser.parent.mkdir(parents=True)
             browser.touch()
-            backend = SignBackend(lambda *_: None, root=root)
+            messages = []
+            backend = SignBackend(lambda text, *_: messages.append(text), root=root)
             with (
                 patch.dict(os.environ, {"PROGRAMFILES": str(root / "Programs")}),
                 patch("browser_paths.registered_browser_paths", return_value=[]),
@@ -79,7 +81,8 @@ class BrowserDiscoveryTests(unittest.TestCase):
             browser = install / "Portable/Runtime/msedge.exe"
             browser.parent.mkdir(parents=True)
             browser.touch()
-            backend = SignBackend(lambda *_: None, root=root)
+            messages = []
+            backend = SignBackend(lambda text, *_: messages.append(text), root=root)
             with patch.object(backend, "browser_candidates", return_value=[
                 ("Microsoft Edge", [str(install / "Application/msedge.exe")]),
             ]):
@@ -88,18 +91,21 @@ class BrowserDiscoveryTests(unittest.TestCase):
             backend.update_settings(browser_path=f'"{install}"', browser_name="Microsoft Edge")
             restarted = SignBackend(lambda *_: None, root=root)
             self.assertEqual(restarted.find_browser()[0], str(browser.resolve()))
-            self.assertIn("找到 Microsoft Edge", (root / "browser-detection.log").read_text(encoding="utf-8"))
+            self.assertTrue(any("找到 Microsoft Edge" in text for text in messages))
+            self.assertFalse((root / "browser-detection.log").exists())
 
     def test_timeout_is_reported_instead_of_claiming_scan_completed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            backend = SignBackend(lambda *_: None, root=root)
+            messages = []
+            backend = SignBackend(lambda text, *_: messages.append(text), root=root)
             with (
                 patch.object(backend, "browser_candidates", return_value=[("Microsoft Edge", [str(root / "msedge.exe")])]),
                 patch("yxy_backend.time.monotonic", side_effect=[0, 11]),
             ):
                 self.assertEqual(backend.find_browser(), (None, None))
-            log = (root / "browser-detection.log").read_text(encoding="utf-8")
+            log = "\n".join(messages)
+            self.assertFalse((root / "browser-detection.log").exists())
             self.assertIn("检测超时", log)
             self.assertNotIn("检测结束", log)
 

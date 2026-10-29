@@ -21,7 +21,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from contextlib import redirect_stderr, redirect_stdout
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -32,7 +32,8 @@ from dgutbot.app.browser_paths import BROWSER_NAMES, resolve_browser_path
 from dgutbot.app.browser_lifetime import BrowserLifetime, FRONTEND_DISPLAY_PATH
 from dgutbot.app.campus_startup import configure_campus_login_startup, open_campus_login
 from dgutbot.agent.runtime import new_runtime, publish_runtime, remove_runtime
-from dgutbot.app.commands import AGENT_SERVICE, backend, configure_agent_registry
+from dgutbot.app.commands import AGENT_SERVICE, EVENT_BUFFER, backend, configure_agent_registry, emit_event
+from dgutbot.logs import EventLogStream
 from dgutbot.app.server import (
     CLIENT_CLOSED_EVENT,
     LocalApiHandler,
@@ -47,8 +48,6 @@ from dgutbot.app.yxy_mutex import APP_MUTEX, NamedMutex, app_mutex_exists
 
 ROOT = data_root()
 FRONTEND = resource_root() / "frontend"
-LOG_PATH = ROOT / "browser-launcher.log"
-SERVICE_LOG_PATH = ROOT / "browser-service.log"
 APP_TITLE = "莞工小皮卡"
 DUPLICATE_NOTICE_SECONDS = 4.0
 # 助手页在用户切到优学院课件页后会成为后台标签；Chromium 会明显降低
@@ -148,13 +147,10 @@ def stop_process(process: subprocess.Popen | None) -> None:
 
 
 def show_log_tail() -> None:
-    try:
-        lines = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return
-    if lines:
-        print("\n前端日志末尾：")
-        print("\n".join(lines[-20:]))
+    events = EVENT_BUFFER.log_page(module="app", limit=20)["events"]
+    if events:
+        print("\n启动诊断末尾：")
+        print("\n".join(event["message"] for event in events))
 
 
 def open_frontend(url: str) -> str:
@@ -162,12 +158,12 @@ def open_frontend(url: str) -> str:
     print("正在寻找 Chromium 浏览器：")
     path, name = backend.find_browser(progress=lambda candidate: print(f"  {candidate}"), timeout_seconds=10)
     if not path or not name:
-        log_line(LOG_PATH, "未找到 Chromium 浏览器，等待终端配置。")
-        print(f"检测详情已写入：{ROOT / 'browser-detection.log'}")
+        log_line("未找到 Chromium 浏览器，等待终端配置。")
+        print("检测详情见当前启动窗口。")
         return "manual"
     print(f"找到了 {name}：{path}")
     backend.update_settings(browser_name=name, browser_path=path)
-    log_line(LOG_PATH, f"浏览器配置已确认：{name}，{path}")
+    log_line(f"浏览器配置已确认：{name}，{path}")
     print(f"已保存浏览器配置地址：{path}")
     if not url:
         return "debug"
@@ -204,7 +200,7 @@ def prompt_for_browser(web_url: str) -> bool:
             except OSError as error:
                 selected = ""
                 print(f"无法打开文件选择窗口：{error}；可以在下方手动填写路径。")
-                log_line(LOG_PATH, f"文件选择窗口失败：{error}")
+                log_line(f"文件选择窗口失败：{error}")
             if selected and configure_browser_path(selected):
                 return True
             use_picker = False
@@ -238,13 +234,9 @@ def request_service_shutdown(web_url: str) -> None:
         pass
 
 
-def log_line(path: Path, message: str) -> None:
-    """无控制台的冻结进程把关键启动信息追加到日志文件。"""
-    try:
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}\n")
-    except OSError:
-        pass
+def log_line(message: str, level: str = "info") -> None:
+    """启动诊断只进入本进程内存，供查看与显式导出。"""
+    emit_event("APP_DIAGNOSTIC", level, "app", message, module="app")
 
 
 def show_notice_window(message: str, title: str = APP_TITLE, auto_close_ms: int | None = None) -> None:
@@ -282,6 +274,22 @@ def static_frontend_available() -> bool:
 
 
 def run_background_service(web_port: int, use_static: bool = False, api_port: int = 8765) -> int:
+    """后台输出仅保存在当前服务的事件缓冲区，退出时恢复标准输出。"""
+    with EventLogStream(log_line) as stdout, EventLogStream(lambda line: log_line(line, "error")) as stderr:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            return _run_background_service(web_port, use_static, api_port)
+
+
+def collect_frontend_output(process: subprocess.Popen) -> None:
+    """持续排空 Vite 管道，避免子进程阻塞；不创建诊断文件。"""
+    if process.stdout is None:
+        return
+    with process.stdout, EventLogStream(log_line) as stream:
+        for line in iter(lambda: process.stdout.readline(EventLogStream.MAX_LINE_CHARS), ""):
+            stream.write(line)
+
+
+def _run_background_service(web_port: int, use_static: bool = False, api_port: int = 8765) -> int:
     """独立持有 API 与前端；启动终端被关闭后此进程仍继续运行。"""
     SHUTDOWN_EVENT.clear()
     reset_client_state()
@@ -297,7 +305,7 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
     server_started = False
     runtime = None
     vite: subprocess.Popen | None = None
-    log_file = None
+    output_thread = None
     try:
         server_port = web_port if use_static else api_port
         server = ThreadingHTTPServer(("127.0.0.1", server_port), LocalApiHandler)
@@ -310,7 +318,6 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
         if use_static:
             print(f"发布包模式：由本地服务直接托管 frontend/dist，前端地址 http://127.0.0.1:{web_port}", flush=True)
         else:
-            log_file = LOG_PATH.open("w", encoding="utf-8")
             vite_env = os.environ.copy()
             vite_env["YXY_API_PORT"] = str(api_port)
             vite = subprocess.Popen(
@@ -318,10 +325,15 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
                 cwd=FRONTEND,
                 env=vite_env,
                 stdin=subprocess.DEVNULL,
-                stdout=log_file,
+                stdout=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            output_thread = threading.Thread(target=collect_frontend_output, args=(vite,), name="frontend-output", daemon=True)
+            output_thread.start()
         update_manager.set_ports(f"http://127.0.0.1:{web_port}", web_port)
         update_manager.set_exit_callback(SHUTDOWN_EVENT.set, stop_backend_tasks)
         update_manager.start_auto_check()
@@ -358,8 +370,8 @@ def run_background_service(web_port: int, use_static: bool = False, api_port: in
                 server.shutdown()
             server.server_close()
         stop_process(vite)
-        if log_file is not None:
-            log_file.close()
+        if output_thread is not None:
+            output_thread.join(timeout=2)
         if runtime is not None:
             remove_runtime(runtime.instance_id)
         app_mutex.release()
@@ -384,43 +396,21 @@ def start_background_service(web_port: int, use_static: bool = False, api_port: 
     flags = 0
     if sys.platform == "win32":
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    if is_frozen():
-        # 冻结的服务进程把输出写进自己的日志文件，不需要继承句柄。
-        return subprocess.Popen(
-            service_command(web_port, use_static, api_port),
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-            close_fds=True,
-        )
-    service_log = SERVICE_LOG_PATH.open("w", encoding="utf-8")
-    try:
-        return subprocess.Popen(
-            service_command(web_port, use_static, api_port),
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=service_log,
-            stderr=subprocess.STDOUT,
-            creationflags=flags,
-            close_fds=True,
-        )
-    finally:
-        service_log.close()
-
-
-def redirect_frozen_output() -> None:
-    """无控制台的冻结进程把 stdout/stderr 落到日志文件，避免诊断信息丢失。"""
-    if sys.platform != "win32":
-        return
-    target = SERVICE_LOG_PATH if "--service" in sys.argv else LOG_PATH
-    try:
-        handle = target.open("w", encoding="utf-8", buffering=1)
-        sys.stdout = handle
-        sys.stderr = handle
-    except OSError:
-        pass
+    # 导入或服务初始化失败时也能在启动窗口看到诊断；管道不写文件。
+    process = subprocess.Popen(
+        service_command(web_port, use_static, api_port),
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=flags,
+        close_fds=True,
+    )
+    threading.Thread(target=collect_frontend_output, args=(process,), name="service-output", daemon=True).start()
+    return process
 
 
 def prepare_launcher_console() -> None:
@@ -450,16 +440,16 @@ def main() -> int:
     try:
         prepare_launcher_console()
     except OSError as error:
-        log_line(LOG_PATH, str(error))
+        log_line(str(error))
         show_notice_window(str(error))
         return 1
-    log_line(LOG_PATH, "启动终端已就绪，开始检查浏览器配置。")
+    log_line("启动终端已就绪，开始检查浏览器配置。")
     if backend.config.campus_login_on_startup:
         try:
             # 应用更新后刷新启动命令中的程序路径。
             configure_campus_login_startup(True)
         except OSError as error:
-            log_line(LOG_PATH, f"刷新校园网开机启动项失败：{error}")
+            log_line(f"刷新校园网开机启动项失败：{error}")
     if app_mutex_exists():
         show_already_running_notice()
         return 0
@@ -541,6 +531,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    if is_frozen() and "--service" in sys.argv:
-        redirect_frozen_output()
     raise SystemExit(main())

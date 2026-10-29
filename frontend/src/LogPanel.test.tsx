@@ -11,6 +11,7 @@ describe("log page", () => {
     expect(html).toContain("跟随中");
     expect(html).toContain("刷新");
     expect(html).toContain("导出日志");
+    expect(html).toContain("仅保留本次运行记录，关闭程序后清空");
   });
 
   it("has no filter controls and no subtitle", () => {

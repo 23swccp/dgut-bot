@@ -61,7 +61,7 @@ def run(port: int, classroom_id: int, attendance_id: int, code: str, location: s
         sender = SignMonitor(request=session.request, selected_course=lambda: None,
                              settings=lambda: SimpleNamespace(poll_interval=5),
                              token=lambda: session.headers["Authorization"], user_id=lambda: user_id,
-                             log=lambda *_: None, write_log=lambda *_: None)
+                             log=lambda *_: None)
         response = sender.direct_sign_request(payload)  # 整个脚本只调用一次，不自动重试。
         result = {"http": response.status_code, "before": before, "response": response.text}
         print(json.dumps(result, ensure_ascii=False), flush=True)

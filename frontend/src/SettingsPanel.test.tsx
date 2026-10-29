@@ -8,6 +8,9 @@ describe("settings panel", () => {
   it("has no manual save button and defaults auto-answer on", () => {
     const html = renderToStaticMarkup(<SettingsPanel config={{}} call={call} writer={new SettingsAutosave(call)} onSaved={() => {}} monitoring={false} />);
     expect(html).not.toContain("保存全部设置");
+    expect(html).not.toContain("保存完整运行日志");
+    expect(html).not.toContain("日志路径");
+    expect(html).not.toContain("打开日志");
     expect(html).toContain('aria-checked="true" aria-label="自动答题"');
   });
   it("restores a saved disabled choice and preserves the monitoring restriction", () => {
