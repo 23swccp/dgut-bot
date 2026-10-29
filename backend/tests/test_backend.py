@@ -91,7 +91,7 @@ class BackendTests(unittest.TestCase):
         )
         self.assertEqual(config.debug_port, 9222)
         self.assertEqual(config.poll_interval, 2)
-        self.assertFalse(config.save_log)
+        self.assertNotIn("save_log", config.to_mapping())
         self.assertEqual(config.lat, 23.0432)
         self.assertEqual(config.lng, -180)
         self.assertEqual(config.course_playback_rate, 16)
@@ -292,38 +292,6 @@ class BackendTests(unittest.TestCase):
             backend.clear_selected_course()
             self.assertIsNone(backend.selected_course)
 
-    def test_log_uses_one_append_only_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            backend = self.make_backend(root)
-            log_path = root / "data.md"
-            backend.update_settings(log_path=str(log_path))
-            backend._write_sign_log("测试课程", "一键签到", ["HTTP/status: 200"])
-            backend._write_sign_log("测试课程", "数字码签到", ["HTTP/status: 201"])
-            content = log_path.read_text(encoding="utf-8")
-            self.assertEqual(content.count("测试课程"), 2)
-            self.assertIn("HTTP/status: 200", content)
-
-    def test_relative_log_path_is_resolved_from_application_root(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            backend = self.make_backend(root)
-            backend.update_settings(log_path="logs/data.md")
-            backend._write_sign_log("测试课程", "一键签到", ["HTTP/status: exception"])
-            self.assertTrue((root / "logs" / "data.md").is_file())
-
-    def test_log_redacts_common_credentials(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            backend = self.make_backend(root)
-            log_path = root / "data.md"
-            backend.update_settings(log_path=str(log_path))
-            backend._write_sign_log("测试课程", "一键签到", ["Authorization: secret-token", "password=hunter2"])
-            content = log_path.read_text(encoding="utf-8")
-            self.assertNotIn("secret-token", content)
-            self.assertNotIn("hunter2", content)
-            self.assertGreaterEqual(content.count("[已隐藏]"), 2)
-
     def test_config_writes_atomically_without_leaving_temporary_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -333,13 +301,18 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(AppConfig.from_mapping(saved, root).poll_interval, 8)
             self.assertEqual(list(root.glob(".config.json.*.tmp")), [])
 
-    def test_open_log_creates_file_and_uses_default_app(self):
+    def test_open_exported_log_does_not_modify_file_and_uses_default_app(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backend = self.make_backend(root)
+            exported = root / "日志导出" / "测试.md"
+            exported.parent.mkdir()
+            exported.write_text("手动导出", encoding="utf-8")
+            before = exported.stat().st_mtime_ns
             with patch("yxy_backend.os.startfile", create=True) as startfile:
-                path = backend.open_log_file("logs/签到记录.md")
-            self.assertEqual(path, (root / "logs" / "签到记录.md").resolve())
+                path = backend.open_log_file(str(exported))
+            self.assertEqual(path, exported.resolve())
+            self.assertEqual(exported.stat().st_mtime_ns, before)
             self.assertTrue(path.is_file())
             startfile.assert_called_once_with(str(path))
 
@@ -368,10 +341,8 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(payload["location"], "22.5,113.5")
             self.assertEqual(payload["address"], "测试地点")
             self.assertEqual(payload["attendanceCode"], "")
-            log = (Path(directory) / "data.md").read_text(encoding="utf-8")
-            self.assertIn("位置签到", log)
-            self.assertIn("serviceStatus: 400", log)
-            self.assertNotIn("result: skipped", log)
+            self.assertFalse((Path(directory) / "data.md").exists())
+            self.assertFalse(backend.sign_monitor._last_sign_succeeded)
 
     def test_poll_signs_location_attendance_but_ignores_selection_activity(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -413,10 +384,8 @@ class BackendTests(unittest.TestCase):
             with patch.object(backend.sign_monitor, "direct_sign_request", request):
                 self.assertTrue(backend.sign_monitor.sign(Course(1, "系统工程"), 22, activity))
             self.assertEqual(request.call_args.args[0]["attendanceCode"], "")
-            log = (Path(directory) / "data.md").read_text(encoding="utf-8")
-            self.assertIn("transport: direct-python", log)
-            self.assertIn("HTTP: 200", log)
-            self.assertIn('rawResponse: {"status":200,"msg":"ok"}', log)
+            self.assertFalse((Path(directory) / "data.md").exists())
+            self.assertTrue(backend.sign_monitor._last_sign_succeeded)
 
     def test_qr_sign_submits_empty_code_when_activity_has_no_code(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -92,7 +92,7 @@ export function LogPanel({ call }: { call: Caller }) {
           <button type="button" className="primary compact" disabled={exporting} onClick={() => void exportReport()}>{exporting ? "导出中…" : "导出日志"}</button>
         </div>
         <p className="log-summary">
-          共 {events.length} 条{report ? ` · 已导出 ${report.count} 条` : ""}
+          最近 {events.length} 条 · 仅保留本次运行记录，关闭程序后清空{report ? ` · 已导出 ${report.count} 条` : ""}
           {message && <span className="log-error"> · {message}</span>}
           {report && <button type="button" className="link-button" onClick={() => void openReport()}>打开导出文件</button>}
           {report && <code className="log-report-path">{report.path}</code>}

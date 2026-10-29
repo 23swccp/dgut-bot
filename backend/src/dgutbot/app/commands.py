@@ -18,7 +18,7 @@ from dgutbot.app.paths import data_root
 from dgutbot.app.campus_startup import configure_campus_login_startup
 from dgutbot.app.homework_input import HomeworkInput
 from dgutbot.domain.yxy_backend import SignBackend
-from dgutbot.logs import RunLogSink, append_block, append_block_with_header, redact, session_header, stamp
+from dgutbot.logs import format_event_line, redact
 from dgutbot.app.updater import UpdateManager
 from dgutbot.experimental.ulearning_ai import UlearningAiError
 from dgutbot.experimental.ulearning_ai_bridge import UlearningAiBridge
@@ -116,7 +116,7 @@ class EventBuffer:
         level: str = "", module: str = "", query: str = "", limit: int = 400,
     ) -> dict[str, Any]:
         """日志页读取：按级别/模块/关键词过滤，after_seq 用于增量跟随。"""
-        limit = max(1, min(2000, int(limit)))
+        limit = max(1, min(4000, int(limit)))
         keyword = query.strip().casefold()
         with self._lock:
             snapshot = [dict(event) for event in self._events]
@@ -205,9 +205,7 @@ def emit_event(code: str, level: str, category: str, message: str, **kwargs: Any
 
 
 backend = SignBackend(emit=emit, emit_event=emit_event, root=ROOT)
-# 事件流全部落到 data.md，真实环境出问题可按时间回看整段运行过程。
-RUN_LOG = RunLogSink(lambda: (bool(backend.config.save_log), backend._resolve_log_path()))
-EVENT_BUFFER.subscribe(RUN_LOG.on_event)
+# 运行事件只保存在有限内存缓冲区；仅 export_log_report 显式写文件。
 HOMEWORK_INPUT = HomeworkInput(lambda: int(backend.config.debug_port))
 
 
@@ -292,7 +290,7 @@ def courses() -> list[dict[str, Any]]:
     return [{"id": course.id, "name": course.name, "teacherName": course.teacher_name} for course in backend.courses]
 
 
-# 每秒轮询的只读命令不写进 data.md，否则日志会被心跳淹没；它们抛错时仍然记录。
+# 高频只读命令不加入事件流，避免心跳挤掉有限的内存记录；抛错时仍然记录。
 QUIET_COMMANDS = frozenset({
     "get_login_status", "load_session_and_courses", "get_sign_monitor_status",
     "get_course_scan_status", "get_course_helper_status", "get_update_status",
@@ -304,7 +302,7 @@ def _record_command(
     command: str, payload: dict[str, Any], result: dict[str, Any] | None,
     error: BaseException | None, elapsed_ms: float,
 ) -> None:
-    """把一个命令调用写进事件流：日志页按模块看，data.md 按时间看。
+    """把一个命令调用记进内存事件流，供日志页查看与手动导出。
 
     只记 payload 的键名，绝不记取值；轮询类命令干脆不记。
     """
@@ -331,12 +329,12 @@ def _export_log_report(payload: dict[str, Any]) -> dict[str, Any]:
     module = str(payload.get("module") or "all")
     level = str(payload.get("level") or "")
     query = str(payload.get("query") or "")
-    page = EVENT_BUFFER.log_page(module=module, level=level, query=query, limit=2000)
+    page = EVENT_BUFFER.log_page(module=module, level=level, query=query, limit=4000)
     events = page["events"]
     now = datetime.now()
     label = LOG_MODULE_LABELS.get(module, "全部") if module != "all" else "全部模块"
     # 单独放一层目录，避免把根数据目录刷满导出文件。
-    path = backend.root / "日志导出" / f"日志-{now:%Y%m%d-%H%M%S}.md"
+    path = backend.root / "日志导出" / f"日志-{now:%Y%m%d-%H%M%S-%f}-{uuid4().hex[:8]}.md"
     lines = [f"\n## 日志导出 · {now:%Y-%m-%d %H:%M:%S}\n",
              f"- 范围 {label}"
              + (f" · 级别 {level}" if level else "")
@@ -344,10 +342,12 @@ def _export_log_report(payload: dict[str, Any]) -> dict[str, Any]:
              + f" · {len(events)} 条"
              + ("（缓冲区已满，仅最近若干条）" if page["hasMore"] else "")
              + "\n\n"]
-    lines.extend(RunLogSink.line(event) for event in events)
+    lines.extend(format_event_line(event) for event in events)
     lines.append("\n")
     try:
-        append_block(path, lines)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8") as output:
+            output.writelines(lines)
     except OSError as error:
         return {"ok": False, "error": f"写入导出文件失败：{error}"}
     return {"path": str(path), "count": len(events), "module": module, "level": level, "query": query}
@@ -378,7 +378,8 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "hasMore": page["hasMore"], "bufferSize": page["bufferSize"],
                 "modules": LOG_MODULE_LABELS}
     if command == "export_log_report":
-        return {"ok": True, "report": _export_log_report(payload)}
+        report = _export_log_report(payload)
+        return report if report.get("ok") is False else {"ok": True, "report": report}
     if command == "get_homework_input_status":
         return {"ok": True, "homework": HOMEWORK_INPUT.status()}
     if command == "send_homework_text":
@@ -615,8 +616,8 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             path = backend.open_log_file(str(payload.get("path", "")))
             return {"ok": True, "path": str(path)}
-        except OSError as error:
-            return {"ok": False, "error": f"打开日志失败：{error}"}
+        except (OSError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
     if command == "get_app_info":
         info = handle_agent("system.version", {})
         return {"ok": True, "info": {"appName": info["appName"], "version": info["appVersion"], "repo": GITHUB_REPO}}

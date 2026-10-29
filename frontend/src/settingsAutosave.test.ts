@@ -26,13 +26,13 @@ describe("settings autosave", () => {
     vi.useFakeTimers();
     const call = vi.fn(async () => ({ ok: true }));
     const writer = new SettingsAutosave(call);
-    writer.defer("path", () => { void writer.save("path", "update_settings", { log_path: "old" }); });
-    writer.defer("path", () => { void writer.save("path", "update_settings", { log_path: "new" }); });
+    writer.defer("path", () => { void writer.save("path", "update_settings", { browser_path: "old" }); });
+    writer.defer("path", () => { void writer.save("path", "update_settings", { browser_path: "new" }); });
     writer.defer("rate", () => { void writer.save("rate", "update_settings", { course_playback_rate: 4 }); });
     await vi.advanceTimersByTimeAsync(100);
     expect(call).not.toHaveBeenCalled();
     expect(await writer.flush()).toBe(true);
-    expect(call.mock.calls).toEqual([["update_settings", { log_path: "new" }], ["update_settings", { course_playback_rate: 4 }]]);
+    expect(call.mock.calls).toEqual([["update_settings", { browser_path: "new" }], ["update_settings", { course_playback_rate: 4 }]]);
     await vi.runAllTimersAsync();
     expect(call).toHaveBeenCalledTimes(2);
   });
@@ -43,9 +43,9 @@ describe("settings autosave", () => {
     const writer = new SettingsAutosave(call);
     writer.defer("browser", () => { void writer.save("browser", "update_settings", { browser_path: "bad" }); });
     writer.cancel("browser");
-    writer.defer("log", () => { void writer.save("log", "update_settings", { log_path: "log.md" }); });
+    writer.defer("path", () => { void writer.save("path", "update_settings", { browser_path: "msedge.exe" }); });
     await vi.advanceTimersByTimeAsync(500);
-    expect(call.mock.calls).toEqual([["update_settings", { log_path: "log.md" }]]);
+    expect(call.mock.calls).toEqual([["update_settings", { browser_path: "msedge.exe" }]]);
   });
 
   it("keeps original errors, continues the queue and accepts a successful retry", async () => {

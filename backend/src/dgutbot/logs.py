@@ -1,27 +1,12 @@
-"""data.md 运行日志：事件、命令与签到详情统一写盘。
-
-设计边界：
-- 只写本机文件，不参与任何网络请求，也不回传给学校或第三方。
-- 先脱敏再落盘；调用方传入的文本都要经过 :func:`redact`。
-- 单文件超过 :data:`MAX_BYTES` 时轮转为同目录的 ``*.1.md``，只保留一份历史。
-- 写盘失败绝不影响主流程：调用方负责吞掉异常。
-"""
+"""运行日志只存内存；此处提供显式导出的行格式与后台输出适配，不写文件。"""
 
 from __future__ import annotations
 
-import os
-import platform
+import io
 import re
 import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Callable
-
-# 单文件上限。超过后当前文件改名为 <name>.1.md，新文件继续写。
-MAX_BYTES = 2 * 1024 * 1024
-
-_LOCK = threading.RLock()
-_STATE = {"header": False}
 
 SECRET_PATTERNS = (
     r"(?i)(authorization|token|password|cookie)(\s*[:=]\s*)([^\s,;}&]+)",
@@ -41,53 +26,6 @@ def redact(value: object) -> str:
     return text
 
 
-def _rotate(path: Path) -> None:
-    """只在持锁时调用；轮转失败就继续往原文件写。"""
-    try:
-        if path.stat().st_size < MAX_BYTES:
-            return
-        backup = path.with_name(f"{path.stem}.1{path.suffix}")
-        os.replace(path, backup)
-    except OSError:
-        pass
-
-
-def append_block(path: Path, lines: list[str]) -> None:
-    """整块追加，轮转与并发写都在同一把锁里完成。"""
-    with _LOCK:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _rotate(path)
-        with path.open("a", encoding="utf-8") as file:
-            file.writelines(lines)
-
-
-def append_block_with_header(path: Path, lines: list[str], header: str) -> None:
-    """首次写入（或轮转、删档之后）先落一条会话头，方便把一次运行分开。"""
-    with _LOCK:
-        _rotate(path)
-        try:
-            fresh = not _STATE["header"] or not path.exists() or path.stat().st_size == 0
-        except OSError:
-            fresh = not _STATE["header"]
-        if fresh:
-            append_block(path, [header])
-            _STATE["header"] = True
-        append_block(path, lines)
-
-
-def session_header() -> str:
-    try:
-        from version import APP_VERSION
-
-        version = APP_VERSION
-    except Exception:  # 版本号缺失不应阻断日志
-        version = "unknown"
-    return (
-        f"\n## 运行开始 · {datetime.now():%Y-%m-%d %H:%M:%S}\n"
-        f"- 版本 {version} · Python {platform.python_version()} · {platform.platform()}\n\n"
-    )
-
-
 def stamp(moment: object = "") -> str:
     """事件时间戳统一成本地可读格式，解析失败就用当前时间。"""
     text = str(moment or "").strip()
@@ -99,33 +37,60 @@ def stamp(moment: object = "") -> str:
     return f"{datetime.now():%Y-%m-%d %H:%M:%S}"
 
 
-class RunLogSink:
-    """把事件流里的每条事件写成一行，供真实环境排查。"""
+def format_event_line(event: dict[str, Any]) -> str:
+    time = stamp(event.get("time"))
+    level = str(event.get("level") or "info")
+    category = str(event.get("category") or "")
+    code = str(event.get("code") or "")
+    message = redact(event.get("message") or "").rstrip()
+    data = event.get("data") or {}
+    extra = ""
+    if isinstance(data, dict) and data:
+        rendered = ", ".join(
+            f"{key}={value}" for key, value in sorted(data.items()) if key != "legacyKind"
+        )
+        extra = f" · {redact(rendered)}" if rendered else ""
+    return f"{time} · {level} · {category or code} · {message}{extra}\n"
 
-    def __init__(self, resolve: Callable[[], tuple[bool, Path]]) -> None:
-        self._resolve = resolve
 
-    def on_event(self, event: dict[str, Any]) -> None:
-        try:
-            enabled, path = self._resolve()
-            if not enabled:
-                return
-            append_block_with_header(path, [self.line(event)], session_header())
-        except Exception:  # 日志失败不影响主流程
-            pass
+class EventLogStream(io.TextIOBase):
+    """将后台 stdout/stderr 按行送入有限事件缓冲区，不持有文件句柄。"""
 
-    @staticmethod
-    def line(event: dict[str, Any]) -> str:
-        time = stamp(event.get("time"))
-        level = str(event.get("level") or "info")
-        category = str(event.get("category") or "")
-        code = str(event.get("code") or "")
-        message = redact(event.get("message") or "").rstrip()
-        data = event.get("data") or {}
-        extra = ""
-        if isinstance(data, dict) and data:
-            rendered = ", ".join(
-                f"{key}={value}" for key, value in sorted(data.items()) if key != "legacyKind"
-            )
-            extra = f" · {redact(rendered)}" if rendered else ""
-        return f"{time} · {level} · {category or code} · {message}{extra}\n"
+    MAX_LINE_CHARS = 16_384
+
+    def __init__(self, emit_line: Callable[[str], None]) -> None:
+        super().__init__()
+        self._emit_line = emit_line
+        self._pending = ""
+        self._lock = threading.RLock()
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+    def writable(self) -> bool:
+        return True
+
+    def _send(self, line: str) -> None:
+        if line.strip():
+            try:
+                self._emit_line(redact(line.rstrip("\r")))
+            except Exception:  # 诊断输出不能中断业务，也不能递归写 stderr。
+                pass
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            self._pending += text
+            while "\n" in self._pending or len(self._pending) >= self.MAX_LINE_CHARS:
+                newline = self._pending.find("\n")
+                end = min(newline, self.MAX_LINE_CHARS) if newline >= 0 else self.MAX_LINE_CHARS
+                line = self._pending[:end]
+                self._pending = self._pending[end + (newline == end):]
+                self._send(line)
+        return len(text)
+
+    def flush(self) -> None:
+        with self._lock:
+            if self._pending:
+                self._send(self._pending)
+                self._pending = ""

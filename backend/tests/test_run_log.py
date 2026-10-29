@@ -1,114 +1,98 @@
-"""data.md 运行日志的离线回归：格式、脱敏、轮转与开关。"""
+"""运行日志只保留内存；手动导出、旧配置兼容与后台输出的离线回归。"""
 
+import io
 import json
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+import pytest
 
 from dgutbot import logs
 
 
-def reset_header(monkeypatch):
-    monkeypatch.setitem(logs._STATE, "header", False)
-
-
-def test_event_line_keeps_time_level_category_and_extra_data(monkeypatch):
-    reset_header(monkeypatch)
-    line = logs.RunLogSink.line({
+def test_event_line_keeps_existing_compact_format_and_redaction():
+    line = logs.format_event_line({
         "time": "2026-10-21T19:42:11+08:00", "level": "warning", "category": "sign",
-        "code": "SIGN_POLL_FAILED", "message": "轮询出错：浏览器拒绝执行请求",
-        "data": {"round": 3},
+        "code": "SIGN_POLL_FAILED", "message": "轮询出错", "data": {"round": 3},
     })
-    assert line == "2026-10-21 19:42:11 · warning · sign · 轮询出错：浏览器拒绝执行请求 · round=3\n"
+    assert line == "2026-10-21 19:42:11 · warning · sign · 轮询出错 · round=3\n"
+    secret_line = logs.format_event_line({
+        "message": "Authorization: secret-token / password=hunter2", "data": {"cookie": "SID=abc"},
+    })
+    assert all(secret not in secret_line for secret in ("secret-token", "hunter2", "abc"))
+    assert "[已隐藏]" in secret_line
 
 
-def test_event_line_redacts_credentials(tmp_path, monkeypatch):
-    reset_header(monkeypatch)
-    path = tmp_path / "data.md"
-    sink = logs.RunLogSink(lambda: (True, path))
-    sink.on_event({"time": "", "level": "error", "category": "sign", "code": "X",
-                   "message": "Authorization: secret-token / password=hunter2", "data": {"cookie": "SID=abc"}})
-    content = path.read_text(encoding="utf-8")
-    assert "secret-token" not in content
-    assert "hunter2" not in content
-    assert "abc" not in content
-    assert "[已隐藏]" in content
-
-
-def test_session_header_written_once_per_process(tmp_path, monkeypatch):
-    reset_header(monkeypatch)
-    path = tmp_path / "data.md"
-    sink = logs.RunLogSink(lambda: (True, path))
-    for _ in range(3):
-        sink.on_event({"time": "", "level": "info", "category": "sign", "code": "C", "message": "第 1 轮", "data": {}})
-    content = path.read_text(encoding="utf-8")
-    assert content.count("## 运行开始") == 1
-    assert content.count("第 1 轮") == 3
-
-
-def test_disabled_log_switch_writes_nothing(tmp_path, monkeypatch):
-    reset_header(monkeypatch)
-    path = tmp_path / "data.md"
-    logs.RunLogSink(lambda: (False, path)).on_event(
-        {"time": "", "level": "info", "category": "sign", "code": "C", "message": "不应出现", "data": {}},
-    )
-    assert not path.exists()
-
-
-def test_rotation_keeps_one_previous_file(tmp_path, monkeypatch):
-    reset_header(monkeypatch)
-    path = tmp_path / "data.md"
-    path.write_text("x" * (logs.MAX_BYTES + 1), encoding="utf-8")
-    logs.append_block(path, ["新一行\n"])
-    assert (tmp_path / "data.1.md").is_file()
-    assert path.read_text(encoding="utf-8") == "新一行\n"
-
-
-def test_missing_log_directory_is_created(tmp_path, monkeypatch):
-    reset_header(monkeypatch)
-    path = tmp_path / "logs" / "deep" / "data.md"
-    logs.append_block(path, ["一行\n"])
-    assert path.read_text(encoding="utf-8") == "一行\n"
-
-
-def test_default_log_name_is_data_md(tmp_path):
-    from dgutbot.domain.yxy_backend import AppConfig
-
-    assert AppConfig.from_mapping({}, tmp_path).log_path == str(tmp_path / "data.md")
-
-
-def test_legacy_log_name_migrates_but_custom_paths_are_kept(tmp_path):
-    from dgutbot.domain.yxy_backend import AppConfig
-
-    legacy = AppConfig.from_mapping({"log_path": str(tmp_path / "签到记录.md")}, tmp_path)
-    assert legacy.log_path == str(tmp_path / "data.md")
-    custom = AppConfig.from_mapping({"log_path": str(tmp_path / "my-log.md")}, tmp_path)
-    assert custom.log_path == str(tmp_path / "my-log.md")
-
-
-def test_legacy_log_file_is_renamed_to_data_md(tmp_path):
-    from unittest.mock import Mock
-
+def test_old_config_cannot_enable_automatic_logging_or_move_old_files(tmp_path):
     from dgutbot.domain.yxy_backend import SignBackend
 
     legacy = tmp_path / "签到记录.md"
-    legacy.write_text("2026-10-01-10:00 | 旧课程 | 一键签到 |\n", encoding="utf-8")
+    existing = tmp_path / "data.md"
+    legacy.write_text("旧签到记录", encoding="utf-8")
+    existing.write_text("旧运行日志", encoding="utf-8")
+    (tmp_path / "config.json").write_text(json.dumps({
+        "save_log": True, "log_path": str(tmp_path / "custom" / "data.md"),
+    }), encoding="utf-8")
     backend = SignBackend(Mock(), root=tmp_path)
-    backend.update_settings(log_path=str(tmp_path / "data.md"))
-    backend._write_sign_log("新课程", "一键签到", ["HTTP/status: 200"])
-    content = (tmp_path / "data.md").read_text(encoding="utf-8")
-    assert "旧课程" in content and "新课程" in content
-    assert not legacy.exists()
+    backend._log("普通运行事件", "info")
+    backend.update_settings(save_log=True, log_path="new-log.md")
+    assert "save_log" not in backend.config.to_mapping()
+    assert "log_path" not in backend.config.to_mapping()
+    assert legacy.read_text(encoding="utf-8") == "旧签到记录"
+    assert existing.read_text(encoding="utf-8") == "旧运行日志"
+    assert not (tmp_path / "custom").exists()
+    assert not (tmp_path / "new-log.md").exists()
 
 
-def test_legacy_log_migration_keeps_an_existing_data_md(tmp_path):
-    from unittest.mock import Mock
-
+def test_open_log_requires_existing_explicit_file_without_creating_it(tmp_path):
     from dgutbot.domain.yxy_backend import SignBackend
 
-    (tmp_path / "签到记录.md").write_text("旧内容", encoding="utf-8")
-    (tmp_path / "data.md").write_text("新内容", encoding="utf-8")
-    SignBackend(Mock(), root=tmp_path)
-    assert (tmp_path / "data.md").read_text(encoding="utf-8") == "新内容"
-    assert (tmp_path / "签到记录.md").is_file()
+    backend = SignBackend(Mock(), root=tmp_path)
+    with pytest.raises(ValueError, match="请先"):
+        backend.open_log_file()
+    with pytest.raises(OSError, match="不存在"):
+        backend.open_log_file("missing/data.md")
+    assert not (tmp_path / "missing").exists()
+    assert not (tmp_path / "data.md").exists()
+
+
+def test_event_stream_is_bounded_splits_lines_and_flushes_partial_output():
+    seen = []
+    with logs.EventLogStream(seen.append) as stream:
+        stream.MAX_LINE_CHARS = 32
+        assert stream.write("第一") == 2
+        stream.write("行\r\npassword=hunter2\n")
+        stream.write("x" * 80)
+        stream.flush()
+        stream.write("退出前尾行")
+    assert seen[:2] == ["第一行", "password=[已隐藏]"]
+    assert "".join(seen[2:-1]) == "x" * 80
+    assert all(len(line) <= 32 for line in seen)
+    assert seen[-1] == "退出前尾行"
+
+
+def test_background_diagnostics_enter_memory_without_opening_log_files():
+    from dgutbot.app import browser_launcher, commands
+
+    buffer = commands.EventBuffer()
+    with patch.object(commands, "EVENT_BUFFER", buffer), patch.object(browser_launcher, "_run_background_service") as run:
+        def output(*_):
+            print("后台服务启动")
+            import sys
+            sys.stderr.write("模拟服务异常\n")
+            return 0
+        run.side_effect = output
+        with patch.object(Path, "open", side_effect=AssertionError("不得打开日志文件")):
+            assert browser_launcher.run_background_service(8765, True) == 0
+            process = Mock(stdout=io.StringIO("Vite 输出\n最后半行"))
+            browser_launcher.collect_frontend_output(process)
+            with patch.object(browser_launcher, "service_command", return_value=["service"]), patch.object(browser_launcher.subprocess, "Popen") as popen, patch.object(browser_launcher.threading, "Thread"):
+                popen.return_value.stdout = None
+                browser_launcher.start_background_service(8765, True)
+                assert popen.call_args.kwargs["stdout"] == browser_launcher.subprocess.PIPE
+    events = buffer.get_events()["events"]
+    assert [event["message"] for event in events] == ["后台服务启动", "模拟服务异常", "Vite 输出", "最后半行"]
+    assert events[1]["level"] == "error"
 
 
 def test_events_are_tagged_with_their_owning_module(tmp_path):
@@ -168,7 +152,6 @@ def test_export_log_report_writes_only_the_filtered_module(tmp_path, monkeypatch
     from dgutbot.domain.yxy_backend import SignBackend
 
     backend = SignBackend(Mock(), root=tmp_path)
-    backend.update_settings(log_path=str(tmp_path / "data.md"))
     buffer = commands.EventBuffer()
     monkeypatch.setattr(commands, "EVENT_BUFFER", buffer)
     buffer.emit_event("LEGACY_LOG", "info", "general", "签到第 1 轮")
@@ -183,7 +166,7 @@ def test_export_log_report_writes_only_the_filtered_module(tmp_path, monkeypatch
     assert Path(result["report"]["path"]).parent.name == "日志导出"
 
 
-def test_command_recording_skips_polls_and_keeps_key_names_only(tmp_path, monkeypatch):
+def test_commands_stay_in_memory_skip_polls_and_keep_key_names_only(tmp_path, monkeypatch):
     from unittest.mock import patch
 
     from dgutbot.app import commands
@@ -191,13 +174,14 @@ def test_command_recording_skips_polls_and_keeps_key_names_only(tmp_path, monkey
     from unittest.mock import Mock
 
     backend = SignBackend(Mock(), root=tmp_path)
-    backend.update_settings(log_path=str(tmp_path / "data.md"), save_log=True)
-    monkeypatch.setitem(logs._STATE, "header", False)
+    buffer = commands.EventBuffer()
+    monkeypatch.setattr(commands, "EVENT_BUFFER", buffer)
     with patch.object(commands, "backend", backend):
         assert commands.handle("clear_selected_course", {})["ok"]
         assert commands.handle("get_events", {})["ok"]
         commands.handle("update_account_login", {"username": "student", "password": "hunter2"})
-    content = (tmp_path / "data.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "data.md").exists()
+    content = "\n".join(logs.format_event_line(event) for event in buffer.get_events()["events"])
     assert "· command · clear_selected_course · 成功" in content
     assert "get_events" not in content
     assert "hunter2" not in content
@@ -223,3 +207,38 @@ def test_courseware_commands_and_results_have_a_separate_log_module(tmp_path, mo
     assert len(events) == 2
     assert all(event["module"] == "courseware" for event in events)
     assert {event["level"] for event in events} == {"warning"}
+
+
+def test_manual_export_includes_retained_events_and_creates_distinct_files(tmp_path, monkeypatch):
+    from dgutbot.app import commands
+    from dgutbot.domain.yxy_backend import SignBackend
+
+    monkeypatch.setattr(commands, "backend", SignBackend(Mock(), root=tmp_path))
+    buffer = commands.EventBuffer()
+    monkeypatch.setattr(commands, "EVENT_BUFFER", buffer)
+    for index in range(4100):
+        commands.emit_event("TEST", "info", "app", f"事件-{index:04}", module="app")
+    assert not list(tmp_path.rglob("*.md"))
+    first = commands.handle("export_log_report", {})
+    assert first["ok"] and first["report"]["count"] == 4000
+    path = Path(first["report"]["path"])
+    content = path.read_text(encoding="utf-8")
+    assert "事件-0000" not in content
+    assert "事件-0100" in content and "事件-4099" in content
+    second = commands.handle("export_log_report", {})
+    assert second["ok"] and second["report"]["path"] != str(path)
+    assert path.read_text(encoding="utf-8") == content
+    assert not (tmp_path / "data.md").exists()
+
+
+def test_manual_export_failure_returns_original_error(tmp_path, monkeypatch):
+    from dgutbot.app import commands
+    from dgutbot.domain.yxy_backend import SignBackend
+
+    monkeypatch.setattr(commands, "backend", SignBackend(Mock(), root=tmp_path))
+    monkeypatch.setattr(commands, "EVENT_BUFFER", commands.EventBuffer())
+    with patch.object(Path, "open", side_effect=OSError("disk full")):
+        result = commands.handle("export_log_report", {})
+    assert not result["ok"]
+    assert "disk full" in result["error"]
+    assert "report" not in result

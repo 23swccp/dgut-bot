@@ -79,12 +79,12 @@ export function SettingsPanel({ config, call, writer, onSaved, monitoring, child
     change(patch);
     void persist("browser_path" in patch ? "browser_path" : Object.keys(patch)[0], patch);
   }
-  function editText(key: "browser_path" | "log_path", text: string) {
+  function editText(key: "browser_path", text: string) {
     change({ [key]: text });
     feedback("等待保存…");
     writer.defer(key, () => {
-      if (key === "browser_path" && !text.trim()) { feedback("请填写自定义浏览器程序路径", true); return; }
-      void persist(key, key === "browser_path" ? { browser_path: text.trim(), browser_name: "自定义浏览器" } : { log_path: text });
+      if (!text.trim()) { feedback("请填写自定义浏览器程序路径", true); return; }
+      void persist(key, { browser_path: text.trim(), browser_name: "自定义浏览器" });
     });
   }
   function chooseCustomBrowser() {
@@ -141,7 +141,6 @@ export function SettingsPanel({ config, call, writer, onSaved, monitoring, child
       {quizSwitch("自动答题", "course_quiz_auto_answer")}
       {draft.course_quiz_auto_answer !== false && <div className="quiz-answer-options">{quizSwitch("选择题", "course_quiz_choice_enabled")}{quizSwitch("判断题", "course_quiz_judgment_enabled")}{quizSwitch("填空题", "course_quiz_blank_enabled")}</div>}
     </Card>
-    <Card title="日志与数据">{toggle("保存完整运行日志", "save_log")}<div className="log-path-row"><input aria-label="日志路径" className="field" value={draft.log_path ?? "./data.md"} onChange={event => editText("log_path", event.target.value)} onBlur={flush} onKeyDown={enter}/><button className="secondary" onClick={() => { void writer.flush().then(() => call("open_log", { path: current.current.log_path })).then(result => { if (!result.ok) feedback(result.error || "无法打开日志文件", true); }); }}>打开日志</button></div></Card>
     {children}
     {message && <p role={failed ? "alert" : "status"} className="settings-save-status">{message}</p>}
   </div></section>;

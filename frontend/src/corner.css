@@ -352,8 +352,7 @@
   cursor: not-allowed;
 }
 
-.browser-path-field,
-.log-path-row {
+.browser-path-field {
   margin-top: 12px;
 }
 
@@ -588,10 +587,6 @@
   margin-right: 0;
 }
 
-.utility-settings .log-path-row {
-  margin-top: 12px;
-}
-
 .utility-settings .settings-save {
   margin-top: 14px;
 }
@@ -601,17 +596,6 @@
   color: #8190a8;
   font-size: 13px;
   line-height: 1.55;
-}
-
-.log-path-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-}
-
-.log-path-row .secondary {
-  margin-right: 0;
-  white-space: nowrap;
 }
 
 .field-label {

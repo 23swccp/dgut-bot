@@ -1,5 +1,5 @@
 export type AppConfig = {
-  browser_name?: string; browser_path?: string; save_log?: boolean; log_path?: string;
+  browser_name?: string; browser_path?: string;
   campus_login_on_startup?: boolean; selection_auto_leave?: boolean;
   course_playback_rate?: number; course_auto_dismiss_dialog?: boolean; course_document_scroll_enabled?: boolean;
   course_quiz_auto_answer?: boolean; course_quiz_choice_enabled?: boolean;
