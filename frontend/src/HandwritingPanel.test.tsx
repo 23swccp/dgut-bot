@@ -1,8 +1,37 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SETTINGS, layoutText, PAGE_WIDTH, renderPage, wearPaperLines } from "./handwritingRenderer";
+import { DEFAULT_SETTINGS, layoutText, layoutTokens, PAGE_WIDTH, renderPage, wearPaperLines } from "./handwritingRenderer";
+
+import { prepareMath, splitMath } from "./handwritingMath";
 
 describe("handwriting layout", () => {
   afterEach(() => vi.unstubAllGlobals());
+  it("parses mixed text and formula delimiters, preserving escaped dollars", () => {
+    expect(splitMath(String.raw`价格 \$5，$x^2$ 和 $$\frac{a}{b}$$`)).toEqual([
+      { text: "价格 $5，", math: false }, { text: "x^2", math: true, display: false },
+      { text: " 和 ", math: false }, { text: String.raw`\frac{a}{b}`, math: true, display: true },
+    ]);
+    expect(() => splitMath("文字 $x")).toThrow("缺少结束符");
+  });
+  it("renders formulas locally and rejects invalid TeX", async () => {
+    let svg = "";
+    vi.stubGlobal("URL", { createObjectURL: vi.fn((blob: Blob) => { void blob.text().then(value => { svg = value; }); return "blob:test"; }), revokeObjectURL: vi.fn() });
+    class FakeImage { onload: (() => void) | null = null; set src(_value: string) { queueMicrotask(() => this.onload?.()); } }
+    vi.stubGlobal("Image", FakeImage);
+    const tokens = await prepareMath(String.raw`解：$\frac{1}{2}$`, DEFAULT_SETTINGS);
+    expect(tokens[tokens.length - 1]?.formula?.width).toBeGreaterThan(0);
+    expect(svg).toContain("<svg");
+    expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
+    expect(svg).toContain("<path");
+    await expect(prepareMath(String.raw`$\notacommand$`, DEFAULT_SETTINGS)).rejects.toThrow("公式解析失败");
+  });
+  it("wraps and paginates tall formulas as indivisible items", () => {
+    const formula = { image: {} as HTMLImageElement, width: 750, height: 140 };
+    const layout = layoutTokens([{ char: "甲" }, { char: "", formula }, { char: "乙" }], DEFAULT_SETTINGS, () => 40);
+    const glyphs = layout.pages.flat();
+    expect(glyphs[1].y).toBeGreaterThan(glyphs[0].y);
+    expect(glyphs[2].y).toBeGreaterThan(glyphs[1].y);
+    expect(glyphs[1].y - 70).toBeGreaterThanOrEqual(DEFAULT_SETTINGS.margin);
+  });
   it("wraps and paginates without losing text", () => {
     const text = "测".repeat(1000) + "\n完成";
     const layout = layoutText(text, DEFAULT_SETTINGS, () => 38);

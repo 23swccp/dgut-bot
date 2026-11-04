@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Filter } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
-import { DEFAULT_SETTINGS, FONT_NAMES, PAPER_PHOTOS, isPhotoPaper, layoutText, renderPage, type FontKey, type Layout, type Paper, type Settings } from "./handwritingRenderer";
+import { DEFAULT_SETTINGS, FONT_NAMES, PAPER_PHOTOS, isPhotoPaper, layoutTokens, renderPage, type FontKey, type Layout, type Paper, type Settings } from "./handwritingRenderer";
 import "./HandwritingPanel.css";
 
 type Snapshot = { settings: Settings; seed: number; layout: Layout; missing: string[]; paperImage: HTMLImageElement | null };
@@ -43,6 +43,7 @@ export function HandwritingPanel() {
   const [exporting, setExporting] = useState(false);
   const [format, setFormat] = useState<"png" | "jpeg">("png");
   const [error, setError] = useState("");
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -60,10 +61,14 @@ export function HandwritingPanel() {
           const canvas = document.createElement("canvas"); const ctx = canvas.getContext("2d");
           if (!ctx) throw new Error("无法创建预览，请重试。");
           ctx.font = `${settings.size}px "hw-${settings.font}", "hw-xiaolai", sans-serif`;
-          const layout = layoutText(text, settings, char => ctx.measureText(char).width);
+          const tokens = text.includes("$")
+            ? await (await import("./handwritingMath")).prepareMath(text, settings)
+            : Array.from(text.replace(/\r\n?/g, "\n"), char => ({ char, formula: undefined }));
+          if (cancelled) return;
+          const layout = layoutTokens(tokens, settings, char => ctx.measureText(char).width);
           if (layout.pages.length > 100) throw new Error("页数超过 100 页，请减少空行或分次导出。");
           const selected = new Set(known[settings.font]); const fallback = new Set(known.xiaolai);
-          const missing = [...new Set(Array.from(text).filter(char => !/\s/u.test(char) && !selected.has(char.codePointAt(0)!)))];
+          const missing = [...new Set(tokens.filter(token => !token.formula).map(token => token.char).filter(char => !/\s/u.test(char) && !selected.has(char.codePointAt(0)!)))];
           const unavailable = missing.filter(char => !fallback.has(char.codePointAt(0)!));
           if (unavailable.length) throw new Error(`所选字体及备用字体缺少：${unavailable.slice(0,30).join(" ")}，请修改文字后重试。`);
           setSnapshot({ settings, seed, layout, missing, paperImage });
@@ -105,11 +110,19 @@ export function HandwritingPanel() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setExporting(false); }
   }
+  function insertFormula() {
+    const field = textRef.current; if (!field) return;
+    const start = field.selectionStart, end = field.selectionEnd;
+    const insertion = `$${text.slice(start, end) || "x^2 + y^2 = z^2"}$`;
+    if (text.length - (end - start) + insertion.length > 5000) { setError("插入公式后超过 5000 字，请先精简内容。"); return; }
+    setText(text.slice(0, start) + insertion + text.slice(end));
+    requestAnimationFrame(() => { field.focus(); field.setSelectionRange(start + 1, start + insertion.length - 1); });
+  }
   const disabled = !snapshot || working || exporting || !!error;
   return <article className="card handwriting-card">
     <div className="homework-card-title"><h3>字迹生成器</h3><p>输入文字，实时预览并导出图片。</p></div>
     <div className="handwriting-workspace">
-      <div className="handwriting-editor"><label className="homework-input-label" htmlFor="handwriting-text">输入文字</label><textarea id="handwriting-text" value={text} maxLength={5000} placeholder="在这里输入或粘贴文字…" onChange={e => setText(e.target.value)} /><span className="handwriting-count">{text.length} / 5000 字</span></div>
+      <div className="handwriting-editor"><label className="homework-input-label" htmlFor="handwriting-text">输入文字</label><button type="button" className="secondary compact handwriting-insert" onClick={insertFormula}>插入公式</button><textarea ref={textRef} id="handwriting-text" value={text} maxLength={5000} placeholder="在这里输入或粘贴文字…" onChange={e => setText(e.target.value)} /><p className="handwriting-formula-help">公式用 LaTeX：行内输入 <code>$x^2$</code>，独立一行输入 <code>$$\frac&#123;a&#125;&#123;b&#125;$$</code>。美元符号输入 <code>\$</code>。</p><span className="handwriting-count">{text.length} / 5000 字</span></div>
       <div className="handwriting-output"><div className="handwriting-output-head"><strong>预览</strong><button type="button" className="secondary compact" ref={triggerRef} onClick={() => dialogRef.current?.showModal()}><Filter size={16} aria-hidden="true" /> 样式设置</button></div>
         <div className="handwriting-preview">{!snapshot && <p>{working ? "正在生成预览…" : "输入文字后显示预览"}</p>}<canvas ref={canvasRef} hidden={!snapshot} aria-label={`字迹预览第 ${page+1} 页`} /></div>
         {working && <p className="handwriting-hint" role="status">正在更新预览…</p>}
