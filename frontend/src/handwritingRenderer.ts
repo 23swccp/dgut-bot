@@ -7,23 +7,37 @@ export type Settings = { font: FontKey; paper: Paper; scan: "none" | "clear" | "
 export const DEFAULT_SETTINGS: Settings = { font: "xiaolai", paper: "blank", scan: "clear", size: 38, spacing: 1.7, margin: 65, randomness: 25, dry: 15, paperWear: 20, ink: "#1a1a1a" };
 export const FONT_NAMES: Record<FontKey, string> = { xiaolai: "小赖字体", longcang: "龙藏体", cef: "快去写作业", maoken: "猫啃硬笔楷书" };
 export const PAGE_WIDTH = 900, PAGE_HEIGHT = 1273;
-export type Glyph = { char: string; x: number; y: number; index: number };
+export type FormulaImage = { image: HTMLImageElement; width: number; height: number };
+export type Token = { char: string; formula?: FormulaImage };
+export type Glyph = Token & { x: number; y: number; index: number };
 export type Layout = { pages: Glyph[][]; rowsPerPage: number; lineHeight: number };
 
 export function layoutText(text: string, settings: Settings, measure: (char: string) => number): Layout {
+  return layoutTokens(Array.from(text.replace(/\r\n?/g, "\n"), char => ({ char })), settings, measure);
+}
+export function layoutTokens(tokens: Token[], settings: Settings, measure: (char: string) => number): Layout {
   const lineHeight = settings.size * settings.spacing;
   const rowsPerPage = Math.max(1, Math.floor((PAGE_HEIGHT - 2 * settings.margin) / lineHeight));
-  if (!text.length) return { pages: [], rowsPerPage, lineHeight };
+  if (!tokens.length) return { pages: [], rowsPerPage, lineHeight };
   const pages: Glyph[][] = [[]];
-  let row = 0, x = settings.margin, index = 0;
-  const nextLine = () => { row++; x = settings.margin; if (row >= rowsPerPage) { pages.push([]); row = 0; } };
-  for (const char of Array.from(text.replace(/\r\n?/g, "\n"))) {
-    if (char === "\n") { nextLine(); index++; continue; }
-    const width = Math.max(0, measure(char));
-    if (x > settings.margin && x + width > PAGE_WIDTH - settings.margin) nextLine();
-    pages[pages.length - 1].push({ char, x, y: settings.margin + row * lineHeight + lineHeight * 0.53, index });
-    x += width; index++;
+  let row = 0, x = settings.margin, index = 0, pending: Glyph[] = [], rowSpan = 1;
+  const flush = () => {
+    if (row + rowSpan > rowsPerPage) { pages.push([]); row = 0; }
+    for (const glyph of pending) {
+      glyph.y = settings.margin + (row + rowSpan / 2) * lineHeight + lineHeight * .03;
+      pages[pages.length - 1].push(glyph);
+    }
+    row += rowSpan; pending = []; rowSpan = 1; x = settings.margin;
+  };
+  for (const token of tokens) {
+    if (token.char === "\n" && !token.formula) { flush(); index++; continue; }
+    const width = token.formula?.width ?? Math.max(0, measure(token.char));
+    if (x > settings.margin && x + width > PAGE_WIDTH - settings.margin) flush();
+    rowSpan = Math.max(rowSpan, Math.ceil((token.formula?.height ?? 0) / lineHeight));
+    pending.push({ ...token, x, y: 0, index }); x += width; index++;
   }
+  if (pending.length) flush();
+  else if (row >= rowsPerPage) pages.push([]);
   return { pages, rowsPerPage, lineHeight };
 }
 function random(seed: number, index: number, salt: number): number {
@@ -86,6 +100,10 @@ export function renderPage(canvas: HTMLCanvasElement, glyphs: Glyph[], settings:
   const tile = document.createElement("canvas"); tile.width = 160; tile.height = 160;
   const pen = tile.getContext("2d"); if (!pen) throw new Error("无法创建文字图层，请重试。");
   for (const glyph of glyphs) {
+    if (glyph.formula) {
+      ctx.drawImage(glyph.formula.image, glyph.x, glyph.y - glyph.formula.height / 2, glyph.formula.width, glyph.formula.height);
+      continue;
+    }
     if (/^\s$/u.test(glyph.char)) continue;
     const variation = settings.randomness / 100;
     const size = settings.size * (1 + (random(seed, glyph.index, 1)-.5) * .12 * variation);

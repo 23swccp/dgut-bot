@@ -23,3 +23,4 @@
 @media(min-width:1000px){.handwriting-dialog{position:fixed;top:50%;left:max(16px,calc((100vw - 920px)/2 - 80px));margin:0;transform:translateY(-50%)}}
 
 .handwriting-paper-credit{margin-top:16px;color:#65766d;font-size:12px;line-height:1.6;overflow-wrap:anywhere}.handwriting-paper-credit a{color:#087647}
+.handwriting-insert{margin:0 0 8px}.handwriting-formula-help{margin:8px 0 0;color:#65766d;font-size:12px;line-height:1.6}.handwriting-formula-help code{display:inline;padding:1px 3px;background:#f2f5f3;color:#315d48;font-size:inherit}
