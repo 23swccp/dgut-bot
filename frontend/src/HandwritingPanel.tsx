@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { Filter } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
 import { DEFAULT_SETTINGS, FONT_NAMES, PAPER_PHOTOS, isPhotoPaper, layoutTokens, renderPage, type FontKey, type Layout, type Paper, type Settings } from "./handwritingRenderer";
+import { adjustLiteralRanges, convertPastedMath, escapeLiteralDollars, type LiteralRange, type PasteConversion } from "./handwritingPaste";
 import "./HandwritingPanel.css";
 
 type Snapshot = { settings: Settings; seed: number; layout: Layout; missing: string[]; paperImage: HTMLImageElement | null };
@@ -35,6 +36,9 @@ function encode(canvas: HTMLCanvasElement, format: "png" | "jpeg"): Promise<Blob
 
 export function HandwritingPanel() {
   const [text, setText] = useState("");
+  const [literalRanges, setLiteralRanges] = useState<LiteralRange[]>([]);
+  const [paste, setPaste] = useState<{ original: string; converted: PasteConversion; start: number; end: number } | null>(null);
+  const [pasteError, setPasteError] = useState("");
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [seed, setSeed] = useState(20261028);
   const [page, setPage] = useState(0);
@@ -43,6 +47,7 @@ export function HandwritingPanel() {
   const [exporting, setExporting] = useState(false);
   const [format, setFormat] = useState<"png" | "jpeg">("png");
   const [error, setError] = useState("");
+  const pasteDialogRef = useRef<HTMLDialogElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -51,6 +56,7 @@ export function HandwritingPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    const source = escapeLiteralDollars(text, literalRanges);
     if (!text.trim()) { setSnapshot(null); setError(""); setWorking(false); return; }
     setWorking(true); setError("");
     const timer = window.setTimeout(() => {
@@ -62,9 +68,9 @@ export function HandwritingPanel() {
           if (!ctx) throw new Error("无法创建预览，请重试。");
           ctx.font = `${settings.size}px "hw-${settings.font}", "hw-xiaolai", sans-serif`;
           const selected = new Set(known[settings.font]); const fallback = new Set(known.xiaolai);
-          const tokens = text.includes("$")
-            ? await (await import("./handwritingMath")).prepareMath(text, settings, seed, selected, fallback)
-            : Array.from(text.replace(/\r\n?/g, "\n"), char => ({ char, formula: undefined }));
+          const tokens = source.includes("$")
+            ? await (await import("./handwritingMath")).prepareMath(source, settings, seed, selected, fallback)
+            : Array.from(source.replace(/\r\n?/g, "\n"), char => ({ char, formula: undefined }));
           if (cancelled) return;
           const layout = layoutTokens(tokens, settings, char => ctx.measureText(char).width);
           if (layout.pages.length > 100) throw new Error("页数超过 100 页，请减少空行或分次导出。");
@@ -78,7 +84,7 @@ export function HandwritingPanel() {
       })();
     }, 200);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [text, settings, seed]);
+  }, [text, literalRanges, settings, seed]);
 
   useEffect(() => {
     if (!snapshot || !canvasRef.current) return;
@@ -110,19 +116,50 @@ export function HandwritingPanel() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setExporting(false); }
   }
+  function spliceText(start: number, end: number, value: string, literals: LiteralRange[]) {
+    if (text.length - (end - start) + value.length > 5000) return false;
+    const delta = value.length - (end - start);
+    setLiteralRanges(old => [
+      ...old.flatMap(range => range.end <= start ? [range] : range.start >= end ? [{ start: range.start + delta, end: range.end + delta }] : []),
+      ...literals.map(range => ({ start: start + range.start, end: start + range.end })),
+    ]);
+    setText(text.slice(0, start) + value + text.slice(end));
+    requestAnimationFrame(() => { textRef.current?.focus(); textRef.current?.setSelectionRange(start + value.length, start + value.length); });
+    return true;
+  }
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const original = event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
+    if (!original) return;
+    if (original.length > 20000) { event.preventDefault(); setError("粘贴内容过长，请分次粘贴。"); return; }
+    const converted = convertPastedMath(original);
+    if (!converted.count && !converted.literals.length) return;
+    event.preventDefault();
+    const start = event.currentTarget.selectionStart, end = event.currentTarget.selectionEnd;
+    if (converted.count) {
+      setPaste({ original, converted, start, end }); setPasteError("");
+      pasteDialogRef.current?.showModal();
+    } else if (!spliceText(start, end, original, converted.literals)) setError("粘贴后超过 5000 字，请先精简内容。");
+  }
+  function finishPaste(convert: boolean) {
+    if (!paste) return;
+    const value = convert ? paste.converted.text : paste.original;
+    const literals = convert ? paste.converted.literals : Array.from({ length: paste.original.length }, (_, i) => i).filter(i => paste.original[i] === "$").map(i => ({ start: i, end: i + 1 }));
+    if (!spliceText(paste.start, paste.end, value, literals)) { setPasteError("粘贴后超过 5000 字，请先精简内容。"); return; }
+    pasteDialogRef.current?.close(); setPaste(null); setPasteError("");
+  }
   function insertFormula() {
     const field = textRef.current; if (!field) return;
     const start = field.selectionStart, end = field.selectionEnd;
     const insertion = `$${text.slice(start, end) || "x^2 + y^2 = z^2"}$`;
     if (text.length - (end - start) + insertion.length > 5000) { setError("插入公式后超过 5000 字，请先精简内容。"); return; }
-    setText(text.slice(0, start) + insertion + text.slice(end));
+    spliceText(start, end, insertion, []);
     requestAnimationFrame(() => { field.focus(); field.setSelectionRange(start + 1, start + insertion.length - 1); });
   }
   const disabled = !snapshot || working || exporting || !!error;
   return <article className="card handwriting-card">
     <div className="homework-card-title"><h3>字迹生成器</h3><p>输入文字，实时预览并导出图片。</p></div>
     <div className="handwriting-workspace">
-      <div className="handwriting-editor"><label className="homework-input-label" htmlFor="handwriting-text">输入文字</label><button type="button" className="secondary compact handwriting-insert" onClick={insertFormula}>插入公式</button><textarea ref={textRef} id="handwriting-text" value={text} maxLength={5000} placeholder="在这里输入或粘贴文字…" onChange={e => setText(e.target.value)} /><p className="handwriting-formula-help">公式用 LaTeX：行内输入 <code>$x^2$</code>，独立一行输入 <code>$$\frac&#123;a&#125;&#123;b&#125;$$</code>。美元符号输入 <code>\$</code>。</p><span className="handwriting-count">{text.length} / 5000 字</span></div>
+      <div className="handwriting-editor"><label className="homework-input-label" htmlFor="handwriting-text">输入文字</label><button type="button" className="secondary compact handwriting-insert" onClick={insertFormula}>插入公式</button><textarea ref={textRef} id="handwriting-text" value={text} maxLength={5000} placeholder="在这里输入或粘贴文字…" onPaste={handlePaste} onChange={e => { const value = e.target.value; setLiteralRanges(old => adjustLiteralRanges(text, value, old)); setText(value); }} /><p className="handwriting-formula-help">公式用 LaTeX：行内输入 <code>$x^2$</code>，独立一行输入 <code>$$\frac&#123;a&#125;&#123;b&#125;$$</code>。美元符号输入 <code>\$</code>。粘贴 Markdown 公式时可选择转换。</p><span className="handwriting-count">{text.length} / 5000 字</span></div>
       <div className="handwriting-output"><div className="handwriting-output-head"><strong>预览</strong><button type="button" className="secondary compact" ref={triggerRef} onClick={() => dialogRef.current?.showModal()}><Filter size={16} aria-hidden="true" /> 样式设置</button></div>
         <div className="handwriting-preview">{!snapshot && <p>{working ? "正在生成预览…" : "输入文字后显示预览"}</p>}<canvas ref={canvasRef} hidden={!snapshot} aria-label={`字迹预览第 ${page+1} 页`} /></div>
         {working && <p className="handwriting-hint" role="status">正在更新预览…</p>}
@@ -132,6 +169,13 @@ export function HandwritingPanel() {
         <div className="handwriting-export"><label>格式 <select value={format} onChange={e => setFormat(e.target.value as "png" | "jpeg")}><option value="png">PNG</option><option value="jpeg">JPG</option></select></label><button type="button" className="secondary compact" disabled={disabled} onClick={() => void download(false)}>下载当前页</button><button type="button" className="primary compact" disabled={disabled} onClick={() => void download(true)}>{exporting ? "正在导出…" : "下载全部"}</button></div>
       </div>
     </div>
+    <dialog className="handwriting-dialog handwriting-paste-dialog" ref={pasteDialogRef} onCancel={e => { e.preventDefault(); pasteDialogRef.current?.close(); setPaste(null); setPasteError(""); textRef.current?.focus(); }} aria-labelledby="handwriting-paste-title" aria-describedby="handwriting-paste-description">
+      <h3 id="handwriting-paste-title">检测到公式</h3>
+      <p id="handwriting-paste-description">粘贴内容中发现 {paste?.converted.count ?? 0} 处公式，是否转换成手写公式？</p>
+      {paste && <pre className="handwriting-paste-source">{paste.original}</pre>}
+      {pasteError && <p className="homework-result error" role="alert">{pasteError}</p>}
+      <div className="handwriting-dialog-actions"><button type="button" className="secondary compact" onClick={() => { pasteDialogRef.current?.close(); setPaste(null); setPasteError(""); textRef.current?.focus(); }}>取消粘贴</button><button type="button" className="secondary compact" onClick={() => finishPaste(false)}>粘贴原文</button><button type="button" className="primary compact" onClick={() => finishPaste(true)}>转换公式</button></div>
+    </dialog>
     <dialog className="handwriting-dialog" ref={dialogRef} onClose={() => triggerRef.current?.focus()} aria-labelledby="handwriting-settings-title"><div className="handwriting-dialog-head"><h3 id="handwriting-settings-title">样式设置</h3><button type="button" className="secondary compact" onClick={() => dialogRef.current?.close()}>完成</button></div>
       <div className="handwriting-settings">
         <label>字体<select value={settings.font} onChange={e => update("font", e.target.value as FontKey)}>{fonts.map(font => <option key={font} value={font}>{FONT_NAMES[font]}</option>)}</select></label>
