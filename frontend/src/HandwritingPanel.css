@@ -24,3 +24,6 @@
 
 .handwriting-paper-credit{margin-top:16px;color:#65766d;font-size:12px;line-height:1.6;overflow-wrap:anywhere}.handwriting-paper-credit a{color:#087647}
 .handwriting-insert{margin:0 0 8px}.handwriting-formula-help{margin:8px 0 0;color:#65766d;font-size:12px;line-height:1.6}.handwriting-formula-help code{display:inline;padding:1px 3px;background:#f2f5f3;color:#315d48;font-size:inherit}
+
+.handwriting-paste-dialog p{color:#53645b;line-height:1.6}.handwriting-paste-source{max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:#f4f7f5;border-radius:8px;font:13px/1.6 monospace;color:#374458}
+@media(min-width:1000px){.handwriting-paste-dialog{left:50%;transform:translate(-50%,-50%)}}
