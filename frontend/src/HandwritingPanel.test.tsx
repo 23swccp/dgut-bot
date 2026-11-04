@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, layoutText, layoutTokens, PAGE_WIDTH, renderPage, wearPaperLines } from "./handwritingRenderer";
 
-import { prepareMath, splitMath } from "./handwritingMath";
+import { prepareMath, replaceMathGlyphs, splitMath } from "./handwritingMath";
 
 describe("handwriting layout", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -11,6 +11,15 @@ describe("handwriting layout", () => {
       { text: " 和 ", math: false }, { text: String.raw`\frac{a}{b}`, math: true, display: true },
     ]);
     expect(() => splitMath("文字 $x")).toThrow("缺少结束符");
+  });
+  it("uses handwriting glyphs while retaining unsupported mathematical symbols", () => {
+    const svg = '<path data-c="1D465" d="x"></path><path data-c="32" d="two"></path><path data-c="2211" d="sum"></path>';
+    const output = replaceMathGlyphs(svg, char => ({ url: `data:image/png;base64,${char}`, width: 500 }), 25, 1);
+    expect(output).toContain('base64,x');
+    expect(output).toContain('base64,2');
+    expect(output).toContain('data-c="2211"');
+    expect(replaceMathGlyphs(svg, () => null, 25, 1)).toBe(svg);
+    expect(replaceMathGlyphs(svg, char => ({ url: char, width: 500 }), 25, 1)).toBe(replaceMathGlyphs(svg, char => ({ url: char, width: 500 }), 25, 1));
   });
   it("renders formulas locally and rejects invalid TeX", async () => {
     let svg = "";

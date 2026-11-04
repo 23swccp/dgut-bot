@@ -61,13 +61,13 @@ export function HandwritingPanel() {
           const canvas = document.createElement("canvas"); const ctx = canvas.getContext("2d");
           if (!ctx) throw new Error("无法创建预览，请重试。");
           ctx.font = `${settings.size}px "hw-${settings.font}", "hw-xiaolai", sans-serif`;
+          const selected = new Set(known[settings.font]); const fallback = new Set(known.xiaolai);
           const tokens = text.includes("$")
-            ? await (await import("./handwritingMath")).prepareMath(text, settings)
+            ? await (await import("./handwritingMath")).prepareMath(text, settings, seed, selected, fallback)
             : Array.from(text.replace(/\r\n?/g, "\n"), char => ({ char, formula: undefined }));
           if (cancelled) return;
           const layout = layoutTokens(tokens, settings, char => ctx.measureText(char).width);
           if (layout.pages.length > 100) throw new Error("页数超过 100 页，请减少空行或分次导出。");
-          const selected = new Set(known[settings.font]); const fallback = new Set(known.xiaolai);
           const missing = [...new Set(tokens.filter(token => !token.formula).map(token => token.char).filter(char => !/\s/u.test(char) && !selected.has(char.codePointAt(0)!)))];
           const unavailable = missing.filter(char => !fallback.has(char.codePointAt(0)!));
           if (unavailable.length) throw new Error(`所选字体及备用字体缺少：${unavailable.slice(0,30).join(" ")}，请修改文字后重试。`);

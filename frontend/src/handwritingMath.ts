@@ -37,10 +37,44 @@ export function splitMath(input: string): { text: string; math: boolean; display
   addPlain(); return parts;
 }
 
-export async function prepareMath(input: string, settings: Settings): Promise<Token[]> {
+// MathJax 负责结构布局；常用字母和数字换成已加载的手写字体，其他数学符号保留原字形。
+export function replaceMathGlyphs(svg: string, glyph: (char: string) => { url: string; width: number } | null, randomness: number, seed: number): string {
+  let index = 0;
+  return svg.replace(/<path data-c="([0-9A-F]+)" d="[^"]*"><\/path>/g, (original, hex: string) => {
+    const char = String.fromCodePoint(parseInt(hex, 16)).normalize("NFKC");
+    if (!/^[A-Za-z0-9+=()\-]$/.test(char)) return original;
+    const image = glyph(char); if (!image) return original;
+    const n = Math.sin((++index + seed) * 127.1) * 43758.5453;
+    const dy = ((n - Math.floor(n)) - .5) * 24 * randomness / 100;
+    const width = Math.min(image.width, /[+=]/.test(char) ? 700 : 500);
+    return `<image href="${image.url}" x="0" y="-960" width="${width}" height="1280" transform="translate(0 ${dy.toFixed(2)}) scale(1 -1)"/>`;
+  });
+}
+function makeGlyphFactory(settings: Settings, selected: Set<number>, fallback: Set<number>): (char: string) => { url: string; width: number } | null {
+  const canvas = globalThis.document.createElement("canvas"); canvas.width = 150; canvas.height = 128;
+  const context = canvas.getContext("2d"); if (!context) throw new Error("无法创建公式文字图层。");
+  const cache = new Map<string, { url: string; width: number }>();
+  return char => {
+    const code = char.codePointAt(0)!;
+    if (!selected.has(code) && !fallback.has(code)) return null;
+    const saved = cache.get(char); if (saved) return saved;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.font = `100px "hw-${settings.font}", "hw-xiaolai", sans-serif`;
+    context.textBaseline = "alphabetic"; context.fillStyle = settings.ink;
+    context.fillText(char, 4, 96);
+    const pixelWidth = Math.min(150, Math.ceil(context.measureText(char).width + 8));
+    const glyphCanvas = globalThis.document.createElement("canvas"); glyphCanvas.width = pixelWidth; glyphCanvas.height = 128;
+    const glyphContext = glyphCanvas.getContext("2d"); if (!glyphContext) throw new Error("无法创建公式文字图层。");
+    glyphContext.drawImage(canvas, 0, 0);
+    const result = { url: glyphCanvas.toDataURL("image/png"), width: pixelWidth * 10 }; cache.set(char, result); return result;
+  };
+}
+
+export async function prepareMath(input: string, settings: Settings, seed = 0, selected = new Set<number>(), fallback = new Set<number>()): Promise<Token[]> {
   const parts = splitMath(input.replace(/\r\n?/g, "\n"));
   if (parts.filter(part => part.math).length > 100) throw new Error("公式超过 100 个，请分次生成。");
   const tokens: Token[] = [];
+  const glyphFactory = parts.some(part => part.math) && (selected.size > 0 || fallback.size > 0) ? makeGlyphFactory(settings, selected, fallback) : null;
   let skipNewline = false;
   for (const part of parts) {
     if (!part.math) {
@@ -58,6 +92,7 @@ export async function prepareMath(input: string, settings: Settings): Promise<To
       adaptor.setAttribute(element, "style", `color:${settings.ink}`);
       svg = adaptor.outerHTML(element);
       if (svg.includes('data-mml-node="merror"')) throw new Error("公式语法有误，请检查命令和括号。");
+      if (glyphFactory) svg = replaceMathGlyphs(svg, glyphFactory, settings.randomness, seed + tokens.length);
     } catch (error) { throw new Error(`公式解析失败：${error instanceof Error ? error.message : String(error)}`); }
     const maxWidth = PAGE_WIDTH - 2 * settings.margin;
     const lineHeight = settings.size * settings.spacing;
