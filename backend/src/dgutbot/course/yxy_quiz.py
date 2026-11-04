@@ -6,7 +6,7 @@
 翻页会弹 .modal.fade.in 确认框。本模块只通过 CDP Input 域产生真实点击
 （isTrusted 事件），不调用任何作答接口。
 
-QuizReader 提取单选、多选、判断、填空的语义和答案约束；QuizExecutor
+QuizReader 提取单选、多选、判断、填空和简答的语义和答案约束；QuizExecutor
 执行 AI/Agent 校验后的答案；不提供任何固定答案策略。
 
 QuizHandler 不持有任何连接：通过构造参数注入 evaluate/click/type_text 等
@@ -31,6 +31,22 @@ TAB_KEYWORD = "ua.dgut.edu.cn/learnCourse"
 
 # 页面状态读取脚本：一次 evaluate 拿回题目、坐标、提交按钮与弹窗。
 # 只读；坐标为视口坐标，与 Input.dispatchMouseEvent 直接兼容。
+# 推测兼容：只选择真正可编辑且可见的控件，容器与内部输入不能重复计数。
+TEXT_TARGETS_JS = r"""
+function quizTextTargets(w) {
+  const selector = 'input:not([type]), input[type="text"], input[type="search"], textarea, [contenteditable="true"], [contenteditable=""]';
+  return Array.from(w.querySelectorAll(selector)).filter(function(el) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height || el.disabled || el.readOnly || el.getAttribute('aria-disabled') === 'true') return false;
+    if (el.closest('.question-analysis-wrapper, .correct-answer-area, [hidden], [inert]')) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') return false;
+    const parentEditor = el.parentElement && el.parentElement.closest('[contenteditable="true"], [contenteditable=""]');
+    return !parentEditor || !w.contains(parentEditor);
+  });
+}
+"""
+
 QUIZ_STATE_JS = r"""
 (function() {
   /* COURSE_DIALOG_POLICY */
@@ -68,7 +84,7 @@ QUIZ_STATE_JS = r"""
     const tagEl = w.querySelector('.question-type-tag');
     const titleEl = w.querySelector('.question-title-html');
     const promptEl = titleEl ? titleEl.cloneNode(true) : null;
-    if (promptEl) promptEl.querySelectorAll('.answer-width').forEach(function(blank) {
+    if (promptEl) promptEl.querySelectorAll('.answer-width, input, textarea, [contenteditable="true"], [contenteditable=""]').forEach(function(blank) {
       blank.replaceWith(document.createTextNode('[blank]'));
     });
     const choices = [];
@@ -86,14 +102,16 @@ QUIZ_STATE_JS = r"""
       judgment.push({label: /right-btn/.test(b.className) ? '正确' : '错误', selected: b.classList.contains('selected'), pos: center(b)});
     });
     const blanks = [];
-    w.querySelectorAll('.answer-width').forEach(function(s) {
-      if (visible(s)) {
-        const input = s.matches('input, textarea, [contenteditable="true"]')
-          ? s : s.querySelector('input, textarea, [contenteditable="true"]');
-        const target = input && visible(input) ? input : s;
-        blanks.push({pos: center(target), focused: target === document.activeElement || target.contains(document.activeElement), value: String(input ? input.value || input.innerText || '' : s.innerText || '')});
-      }
-    });
+    const typeText = (tagEl ? tagEl.innerText : '').trim();
+    if (['填空题', '简答题', '问答题', '论述题', '分析题'].includes(typeText)) {
+      quizTextTargets(w).forEach(function(target) {
+        const active = document.activeElement;
+        const pos = center(target);
+        pos.enabled = pos.enabled && !target.readOnly;
+        blanks.push({pos: pos, focused: target === active || target.contains(active),
+          value: String('value' in target ? target.value : target.innerText || '')});
+      });
+    }
     let submit = null;
     const area = document.querySelector('.question-operation-area .btn-submit');
     if (area && visible(area)) submit = center(area);
@@ -170,15 +188,17 @@ SCROLL_BLANK_JS = """
 (function(id, index) {
   const w = document.getElementById(id);
   if (!w) return 'missing-question';
-  const blanks = w.querySelectorAll('.answer-width');
+  const blanks = quizTextTargets(w);
   const blank = blanks[index];
   if (!blank) return 'missing-blank';
-  const input = blank.matches('input, textarea, [contenteditable="true"]')
-    ? blank : blank.querySelector('input, textarea, [contenteditable="true"]');
-  (input || blank).scrollIntoView({block: 'center', behavior: 'instant'});
+  blank.scrollIntoView({block: 'center', behavior: 'instant'});
   return 'ok';
 })(%s, %d)
 """
+
+
+QUIZ_STATE_JS = QUIZ_STATE_JS.replace('(function() {', '(function() {\n' + TEXT_TARGETS_JS, 1)
+SCROLL_BLANK_JS = SCROLL_BLANK_JS.replace('(function(id, index) {', '(function(id, index) {\n' + TEXT_TARGETS_JS, 1)
 
 
 @dataclass
@@ -365,16 +385,16 @@ class QuizReader:
         for question in state.questions:
             if question.finished:
                 continue
-            kind = {"单选题": "single_choice", "多选题": "multiple_choice", "判断题": "true_false", "填空题": "fill_blank"}.get(question.type, "unsupported")
+            kind = {"单选题": "single_choice", "多选题": "multiple_choice", "判断题": "true_false", "填空题": "fill_blank", "简答题": "short_answer", "问答题": "short_answer", "论述题": "short_answer", "分析题": "short_answer"}.get(question.type, "unsupported")
             options = [{"id": str(c["label"]), "text": str(c.get("text") or "")} for c in question.choices] if kind in {"single_choice", "multiple_choice"} else []
             if kind in {"single_choice", "multiple_choice"} and (not options or len({c["id"] for c in options}) != len(options) or any(not c["id"] for c in options)):
                 kind = "unsupported"
-            if kind == "fill_blank" and not question.blanks:
+            if (kind == "fill_blank" and not question.blanks) or (kind == "short_answer" and len(question.blanks) != 1):
                 kind = "unsupported"
             schema = {"type": "array", "minItems": 1, "maxItems": 1 if kind == "single_choice" else len(options), "uniqueItems": True, "items": {"enum": [c["id"] for c in options]}} if kind in {"single_choice", "multiple_choice"} else (
                 {"type": "boolean"} if kind == "true_false" else
                 {"type": "array", "minItems": len(question.blanks), "maxItems": len(question.blanks), "items": {"type": "string", "maxLength": 8192}}
-                if kind == "fill_blank" else {"not": {}}
+                if kind in {"fill_blank", "short_answer"} else {"not": {}}
             )
             result.append({"id": question.qid, "type": kind, "sourceType": question.type,
                            "prompt": question.title, "options": options, "blankCount": len(question.blanks),
@@ -425,7 +445,7 @@ class QuizExecutor:
             h._sleep(0.1)
             state = guard()
             question = next(q for q in state.questions if q.qid == qid)
-            if question.type == "填空题":
+            if question.type in {"填空题", "简答题", "问答题", "论述题", "分析题"}:
                 for index, text in enumerate(value):
                     focused = False
                     for _attempt in range(3):
@@ -443,6 +463,7 @@ class QuizExecutor:
                         if existing:
                             raise AgentError("QUIZ_APPLY_FAILED", "A blank already contains different text; manual review is required.")
                         if h._click_in_viewport(blank["pos"], state.viewport):
+                            h._sleep(0.1)
                             focused_state = guard()
                             focused_question = next(q for q in focused_state.questions if q.qid == qid)
                             if focused_question.blanks[index].get("focused"):
@@ -479,7 +500,7 @@ class QuizExecutor:
                 if question.qid not in answers:
                     continue
                 value = answers[question.qid]
-                if question.type == "填空题":
+                if question.type in {"填空题", "简答题", "问答题", "论述题", "分析题"}:
                     matches = [str(blank.get("value") or "") for blank in question.blanks] == value
                 elif question.type == "多选题":
                     matches = {item["label"] for item in question.choices if item.get("selected")} == set(value)

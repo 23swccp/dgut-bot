@@ -32,7 +32,7 @@ TASK = obj({
     "result": nullable(obj({"completed": B})), "error": nullable(ERROR),
 })
 QUIZ_STATE = {"enum": ["pending", "validating", "staged", "applying", "submitting", "completed", "rejected", "expired", "failed", "cancelled"]}
-QUESTION = obj({"id": S, "type": {"enum": ["single_choice", "multiple_choice", "true_false", "fill_blank", "unsupported"]},
+QUESTION = obj({"id": S, "type": {"enum": ["single_choice", "multiple_choice", "true_false", "fill_blank", "short_answer", "unsupported"]},
                 "sourceType": S, "prompt": S, "options": array(obj({"id": S, "text": S})), "blankCount": I,
                 "hasMedia": B, "answerSchema": {"type": "object"}})
 QUIZ = obj({"requestId": S, "revision": I, "taskId": S, "sessionId": S, "pageId": S, "state": QUIZ_STATE,

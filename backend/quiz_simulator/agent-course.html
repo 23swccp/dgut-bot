@@ -56,7 +56,7 @@
       let value;
       if (q.dataset.kind === 'single_choice' || q.dataset.kind === 'multiple_choice') value = [...q.querySelectorAll('.checkbox.selected')].map(n => n.parentElement.dataset.option);
       else if (q.dataset.kind === 'true_false') value = q.querySelector('.choice-btn.selected')?.classList.contains('right-btn') ?? null;
-      else value = [...q.querySelectorAll('input')].map(n => n.value);
+      else value = [...q.querySelectorAll('[data-answer]')].map(n => 'value' in n ? n.value : n.innerText);
       return [q.id, value];
     }));
   }
@@ -95,14 +95,31 @@
           group.append(button);
         }
         q.append(group);
+      } else if (question.type === 'short_answer') {
+        const editor = element(config.editorKind === 'editable' ? 'div' : 'textarea', 'form-control');
+        editor.dataset.answer = '1';
+        if (config.editorKind === 'editable') {
+          editor.contentEditable = 'true'; editor.style.cssText = 'min-height:90px;border:1px solid;padding:15px';
+          const child = element('span', ''); child.contentEditable = 'true'; editor.append(child);
+        }
+        q.append(editor);
       } else {
         for (let i = 0; i < (question.blankCount || 2); i++) {
           const holder = element('span', 'answer-width input-wrapper'), input = document.createElement('input');
-          input.className = 'blank-input'; input.type = 'text';
+          input.className = 'blank-input'; input.type = 'text'; input.dataset.answer = '1';
           input.setAttribute('aria-label', `填空 ${i + 1}`);
           if (config.prefilled) input.value = `已有用户答案 ${i + 1}`;
-          holder.append(input); title.append(holder);
+          holder.append(input);
+          if (config.textInputs && i === 0) { input.classList.add('answer-width'); title.append(input); }
+          else if (config.textInputs) title.append(input);
+          else title.append(holder);
         }
+      }
+      if (config.textInputs && question.type === 'fill_blank') {
+        const hidden = element('input', 'blank-input'); hidden.hidden = true;
+        const readonly = element('textarea', 'form-control'); readonly.readOnly = true;
+        const analysis = element('div', 'question-analysis-wrapper'); analysis.append(element('input', 'blank-input'));
+        q.append(hidden, readonly, analysis);
       }
       if (config.long) q.style.paddingBottom = '420px';
       view.append(q);
@@ -127,7 +144,7 @@
           q.querySelectorAll('.blank-input').forEach(input => {
             input.disabled = true;
             const gradeResult = element('span', 'result ' + grade, result.correct ? '正确' : '错误');
-            input.closest('.input-wrapper').append(gradeResult);
+            (input.closest('.input-wrapper') || input.parentElement).append(gradeResult);
           });
         });
         status.textContent = '平台记录已确认';

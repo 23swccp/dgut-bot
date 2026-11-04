@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
          "stale_page", "stale_structure", "unsupported", "expired", "occluded", "prefilled",
-         "multi_blank", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable",
+         "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable",
          "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
 
 
@@ -62,6 +62,10 @@ def fixture(seed, case):
         ]
         expected[page_id] = {questions[0]["id"]: [opts[options.index(a + b)]["id"]],
                              questions[1]["id"]: truth, questions[2]["id"]: blank_values}
+        if case in {"short_answer", "editable_answer", "ai_short_answer"}:
+            questions[2].update(type="short_answer", sourceType="简答题", blankCount=1)
+            questions[2]["prompt"] = f"解释「完整英文 short answer 与中文-{seed}」"
+            expected[page_id][questions[2]["id"]] = [f"完整英文 short answer 与中文-{seed}"]
         if case == "unsupported":
             questions[0]["type"] = "essay"
             questions[0]["sourceType"] = "简答题"
@@ -72,7 +76,8 @@ def fixture(seed, case):
             expected[page_id][questions[0]["id"]] = [opt["id"] for opt in opts if int(opt["text"]) >= a + b]
         pages.append({"id": page_id, "questions": questions})
     return {"pages": pages, "document": case == "document", "timed": case in {"timed", "ai_timed"}, "long": case == "long_narrow", "slow": case == "slow_render",
-            "prefilled": case == "prefilled"}, expected
+            "prefilled": case == "prefilled", "textInputs": case == "text_inputs",
+            "editorKind": "editable" if case == "editable_answer" else "textarea"}, expected
 
 
 def solve(request):
@@ -341,7 +346,7 @@ class Lab:
                 break
             check(result["state"] == "completed" and result["result"] == {"completedCount": 3, "submitAttempts": 1}, result)
             check(len(record["submissions"]) == index + 1 and all(s["accepted"] for s in record["submissions"]), record["submissions"])
-        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "multiple_choice", "graded_wrong"}:
+        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "graded_wrong"}:
             final_task = wait_until(lambda: self.task(task_id), lambda t: t["state"] in {"completed", "failed", "cancelled"})
             check(final_task["state"] == "completed", final_task)
         browser_result = self.evaluate("window.labSnapshot()")

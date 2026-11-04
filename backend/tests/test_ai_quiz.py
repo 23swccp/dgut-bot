@@ -176,7 +176,7 @@ class ReplyBridge:
 
 
 def valid_for(request_id, questions):
-    values = {"single_choice": "A", "true_false": True, "fill_blank": ["answer"]}
+    values = {"single_choice": "A", "true_false": True, "fill_blank": ["answer"], "short_answer": ["answer"]}
     return json.dumps({
         "requestId": request_id,
         "answers": [values[question["type"]] for question in questions],
@@ -397,3 +397,19 @@ def test_provider_does_not_apply_successful_early_batch_if_later_batch_fails():
     assert result["state"] == "failed"
     assert bridge.calls == 3
     assert page.actions == []
+
+
+def test_ai_short_answer_roundtrip():
+    page, bridge, _logs, provider, controller = provider_setup([valid_for])
+    page.state["questions"][2]["type"] = "简答题"
+    result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
+    assert result["state"] == "completed"
+    assert bridge.calls >= 1
+
+
+def test_short_answer_respects_text_toggle():
+    page, bridge, _logs, provider, controller = provider_setup([valid_for])
+    page.state["questions"][2]["type"] = "简答题"
+    result = provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai", quiz_blank_enabled=False))
+    assert result["state"] == "completed"
+    assert not any(action[0] == "type" for action in page.actions)
