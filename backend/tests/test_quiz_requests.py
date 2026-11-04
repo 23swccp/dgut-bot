@@ -3,6 +3,8 @@ import json
 import threading
 import unittest
 
+import pytest
+
 from dgutbot.agent.leases import LeaseManager
 from dgutbot.agent.protocol import AgentError
 from dgutbot.agent.tasks import IdempotencyStore, TaskManager
@@ -161,3 +163,39 @@ class QuizRequestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_short_answer_uses_text_schema_and_executor():
+    f = QuizFixture()
+    f.state["questions"][2]["type"] = "简答题"
+    from dgutbot.course.yxy_quiz import QuizReader, QuizExecutor
+    questions = QuizReader.questions(f.handler().read_state())
+    assert questions[2]["type"] == "short_answer"
+    from dgutbot.course.quiz_requests import AnswerValidator
+    answers = AnswerValidator.validate(questions, [
+        {"questionId": "q_choice", "value": ["A"]},
+        {"questionId": "q_bool", "value": False},
+        {"questionId": "q_blank", "value": ["完整 short answer"]},
+    ])
+    QuizExecutor(f.handler()).execute(answers, f.handler().read_state, lambda: None)
+    assert ("type", "完整 short answer") in f.actions
+    assert f.actions.count(("click", 90)) == 1
+
+
+def test_ambiguous_short_answer_stays_unsupported():
+    from dgutbot.course.yxy_quiz import QuizReader
+    f = QuizFixture()
+    f.state["questions"][2]["type"] = "简答题"
+    f.state["questions"][2]["blanks"] *= 2
+    assert QuizReader.questions(f.handler().read_state())[2]["type"] == "unsupported"
+
+
+def test_short_answer_focus_failure_never_types_or_submits():
+    from dgutbot.course.yxy_quiz import QuizExecutor
+    f = QuizFixture()
+    f.state["questions"] = [f.state["questions"][2]]
+    f.state["questions"][0]["type"] = "简答题"
+    f.click = lambda *_: True  # Click was dispatched, but the editor never gained focus.
+    with pytest.raises(AgentError, match="focus could not be verified"):
+        QuizExecutor(f.handler()).execute({"q_blank": ["answer"]}, f.handler().read_state, lambda: None)
+    assert f.actions == []
