@@ -45,6 +45,28 @@ class SlideTests(unittest.TestCase):
             self.assertEqual(c.action_executor.execute_click.call_count, int(during_click))
             self.assertEqual(c._slide_progress[('page-1', 'fixture')]['error']['code'], 'parse-failed')
 
+    def test_missing_page_info_requires_current_completed_record_and_auto_next(self):
+        error = {**slide(1, 0), 'state': 'slides-error', 'target': None,
+                 'error': {'code': 'page-info-missing', 'message': '生成的页码信息丢失'}}
+        for auto_next, record, allowed in (
+            (True, {'page': 'page-1', 'recordComplete': True}, True),
+            (True, {'page': 'page-1', 'recordComplete': False}, False),
+            (True, {'page': 'page-2', 'recordComplete': True}, False),
+            (False, {'page': 'page-1', 'recordComplete': True}, False),
+        ):
+            with self.subTest(auto_next=auto_next, record=record):
+                c = self.controller()
+                c._active_config.auto_next = auto_next
+                c._read_bootstrap_state.side_effect = [{'page': 'page-1'}, record] * 2
+                c._emit_event = Mock()
+                for _ in range(2):
+                    c._advance_slide_document({'id': 'frame'}, error)
+                progress = c._slide_progress[('page-1', 'fixture')]
+                self.assertEqual(progress['completed'], allowed)
+                c.action_executor.execute_click.assert_not_called()
+                c._emit_event.assert_called_once()
+                self.assertEqual(c._emit_event.call_args.args[0], 'RESOURCE_SKIPPED' if allowed else 'RESOURCE_ERROR')
+
     def test_error_clear_is_not_completion_and_allows_fresh_detection(self):
         c = self.controller()
         c._emit_event = Mock()

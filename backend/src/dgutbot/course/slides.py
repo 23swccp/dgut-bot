@@ -20,6 +20,11 @@ function readSlideDocument() {
   state.current = index ? parse(index) : 0; state.total = count ? parse(count) : 0;
   const message = document.querySelector('#msg');
   const text = visible(message) ? message.textContent.trim() : '';
+  const pageInfo = ppt.querySelector('#PageInfo');
+  if (!text && visible(ppt) && visible(pageInfo) && state.current === 1 && state.total === 0 &&
+      /^(?:[!！]\s*)?生成的页码信息丢失[!！]?$/.test(pageInfo.textContent.trim())) {
+    return {...state, state: 'slides-error', error: {code: 'page-info-missing', message: '生成的页码信息丢失'}};
+  }
   if (text) {
     let code = 'player-message', description = '课件播放器显示异常提示';
     if (/解析.{0,8}(出错|失败)|转换失败/.test(text)) {
