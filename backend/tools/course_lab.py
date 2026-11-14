@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
          "stale_page", "stale_structure", "unsupported", "expired", "occluded", "prefilled",
          "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable", "ai_suspend_dialog",
-         "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
+         "ai_suspend_dialog_disabled", "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
 
 
 def check(condition, detail):
@@ -367,6 +367,7 @@ class Lab:
         from dgutbot.experimental.ulearning_ai import AiModel, UlearningAiError
 
         calls = []
+        auto_dismiss_disabled = case == "ai_suspend_dialog_disabled"
 
         def complete(messages, **kwargs):
             envelope = json.loads(messages[0]["content"].split("INPUT_JSON=", 1)[1])
@@ -374,7 +375,7 @@ class Lab:
             snapshot = self.evaluate("window.labSnapshot()")
             check(snapshot["starts"] == int(case == "ai_timed"), "AI 请求发生在限时测验开始前")
             calls.append(envelope["requestId"])
-            if case == "ai_suspend_dialog":
+            if case in {"ai_suspend_dialog", "ai_suspend_dialog_disabled"}:
                 self.evaluate("window.labShowSuspend()")
             if case == "ai_unavailable":
                 raise UlearningAiError("synthetic AI unavailable")
@@ -394,15 +395,24 @@ class Lab:
         config = self.commands.backend.config
         with patch.object(self.commands, "AI_BRIDGE", bridge), \
              patch.object(config, "course_quiz_auto_answer", True), \
+             patch.object(config, "course_auto_dismiss_dialog", not auto_dismiss_disabled), \
              patch.object(config, "course_ai_model_id", 2 if case in {"ai_route", "ai_unavailable"} else 1), \
              patch.object(self.commands.backend, "save_config", lambda: None):
             result = self.commands.handle("start_course_helper", {})
             check(result["ok"], result)
             controller = self.commands.backend.course_controller
             status = wait_until(controller.status_snapshot, lambda s: s["completed"] or not s["running"], timeout=60)
-            check(not status["completed"] if case == "ai_unavailable" else status["completed"], status)
+            check(status["completed"] == (case != "ai_unavailable" and not auto_dismiss_disabled), status)
             wait_until(lambda: controller._quiz_busy, lambda busy: not busy)
         browser_result = self.evaluate("window.labSnapshot()")
+        if auto_dismiss_disabled:
+            check(len(calls) == 1 and not record["submissions"], record["submissions"])
+            check(all(browser_result[key] == 0 for key in ("clicks", "inputs", "submits", "next")), browser_result)
+            events = self.commands.EVENT_BUFFER.get_events(after_seq=self.event_start)["events"]
+            stopped = next(event for event in events if event["code"] == "SESSION_STOPPED")
+            check(stopped["data"]["errorCode"] == "QUIZ_DIALOG_BLOCKED", stopped)
+            check("学习计时暂停" in stopped["message"] and "自动处理弹窗已关闭" in stopped["message"], stopped)
+            return {"case": case, "seed": seed, "passed": True, "aiCalls": len(calls), "browser": browser_result, "submissions": []}
         if case == "ai_unavailable":
             check(len(calls) == 2 and not record["submissions"], "全部模型失败后不应提交")
             check(all(browser_result[key] == 0 for key in ("clicks", "inputs", "submits", "starts", "next")), browser_result)
@@ -488,8 +498,10 @@ def main():
                     row["seconds"] = round(time.monotonic() - started, 2)
                     report["cases"].append(row)
                     # 全为本地合成数据；不保存 runtime 凭据、浏览器 profile 或任何真实课程。
-                    (output / f"{case}-{seed}.json").write_text(json.dumps({"result": row, "cli": lab.trace,
-                        "events": lab.commands.EVENT_BUFFER.wait_events(lab.event_start, 0, 100, ["course", "quiz", "session", "navigation", "recovery"])},
+                    # 实验室只跑合成数据，保留本场景的详细日志来还原失败顺序。
+                    events = lab.commands.EVENT_BUFFER.get_events(after_seq=lab.event_start)
+                    events["afterSeq"] = lab.event_start
+                    (output / f"{case}-{seed}.json").write_text(json.dumps({"result": row, "cli": lab.trace, "events": events},
                         ensure_ascii=False, indent=2), encoding="utf-8")
                     print(f"{'通过' if row['passed'] else '失败'} | {case} | seed={seed} | {row['seconds']}s {row.get('error', '')}", flush=True)
         finally:

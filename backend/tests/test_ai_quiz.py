@@ -237,7 +237,7 @@ def test_provider_warns_but_answers_media_question():
 def test_provider_rejects_page_change_before_input():
     page, _bridge, _logs, provider, controller = provider_setup([valid_for])
     controller.status_snapshot = lambda: {"page": {"id": "other"}}
-    with pytest.raises(AgentError, match="changed"):
+    with pytest.raises(AgentError, match="课件页已切换"):
         provider.answer(page.handler(), controller, CourseConfig(quiz_mode="ai"))
     assert page.actions == []
 
@@ -281,20 +281,42 @@ def test_provider_rechecks_quiz_after_dismissing_dialog(outcome):
         page.state["modal"] = None
         if outcome == "changed":
             page.state["questions"][0]["title"] = "new question"
-        return True
+        return "dismissed"
 
     bridge.values = [answer]
-    controller._handle_classified_dialog = dismiss
+    controller._process_classified_dialog = dismiss
     config = CourseConfig(quiz_mode="ai", auto_dismiss_dialog=outcome != "disabled")
     if outcome == "resume":
         assert provider.answer(page.handler(), controller, config)["state"] == "completed"
         assert page.actions.count(("click", 90)) == 1
     else:
-        with pytest.raises(AgentError, match="changed"):
+        with pytest.raises(AgentError) as exc:
             provider.answer(page.handler(), controller, config)
+        assert exc.value.code == ("QUIZ_DIALOG_BLOCKED" if outcome == "disabled" else "QUIZ_PAGE_CHANGED")
         assert page.actions == []
     assert dismissed == ([] if outcome == "disabled" else [("suspend-dialog", "session")])
     assert bridge.calls == 1
+
+
+@pytest.mark.parametrize(("connected", "snapshot", "code"), [
+    (False, None, "QUIZ_CONNECTION_LOST"),
+    (True, None, "QUIZ_READ_FAILED"),
+    (True, '{"present": false}', "QUIZ_PAGE_CHANGED"),
+])
+def test_provider_distinguishes_connection_failure_from_missing_quiz(connected, snapshot, code):
+    page, bridge, _logs, provider, controller = provider_setup([])
+    handler = page.handler()
+
+    def answer(request_id, questions):
+        controller.status_snapshot = lambda: {"page": {"id": "page"}, "connected": connected}
+        handler._evaluate = lambda _script: snapshot
+        return valid_for(request_id, questions)
+
+    bridge.values = [answer]
+    with pytest.raises(AgentError) as exc:
+        provider.answer(handler, controller, CourseConfig(quiz_mode="ai"))
+    assert exc.value.code == code
+    assert page.actions == []
 
 
 def test_provider_starts_timed_quiz_before_reading_new_questions():

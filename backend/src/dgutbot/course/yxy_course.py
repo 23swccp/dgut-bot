@@ -28,8 +28,10 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 from websocket import create_connection
 
+from dgutbot.agent.protocol import AgentError
 from dgutbot.course.yxy_quiz import QuizHandler
-from dgutbot.course.dialogs import DIALOG_POLICY_JS, handle_dialog
+from dgutbot.course.dialogs import DIALOG_OUTCOME_LABELS, DIALOG_POLICY_JS, handle_dialog
+from dgutbot.logs import redact
 from dgutbot.course.slides import SLIDE_READER_JS, SLIDE_STATE_JS, frame_point
 
 
@@ -1632,6 +1634,7 @@ class CourseController:
             session_id=self._session_id,
             page=self._page_info_from_state(state),
             data=data or {},
+            module="course",
         )
 
     @staticmethod
@@ -2329,16 +2332,19 @@ class CourseController:
         elif self.state_machine.state == CourseState.WAITING_PAGE_CONFIRM:
             self._attempt_navigation_if_ready(recovery=True)
 
-    def _handle_classified_dialog(self, *, expected: str | None = None, quiz_session: str | None = None) -> bool:
+    def _handle_classified_dialog(self) -> bool:
+        return self._process_classified_dialog() == "dismissed"
+
+    def _process_classified_dialog(self, *, expected: str | None = None, quiz_session: str | None = None) -> str:
         config = self._active_config
         session_id = self._session_id
         if not self._running or not config or not config.auto_dismiss_dialog:
-            return False
+            return "disabled"
         if quiz_session is not None:
             if not expected or quiz_session != session_id or not self._quiz_busy or config.quiz_mode != "ai":
-                return False
+                return "stopped"
         elif self._quiz_busy:
-            return False
+            return "unavailable"
         outcome, dialog = handle_dialog(
             self.eval_js, self.action_executor.execute_click, self._stop_event.wait,
             lambda: self._running and self._session_id == session_id and not self._stop_event.is_set(),
@@ -2349,19 +2355,17 @@ class CourseController:
             self._emit_event("DIALOG_DISMISSED", "info", "content", f"已处理：{dialog['title']}",
                              state=(self._last_status or {}).get("state"),
                              data={"kind": dialog['type'], "policy": dialog['policy']})
-            return True
+            return outcome
         if dialog and outcome not in {"absent", "changed", "stopped"}:
             key = (dialog.get("signature", ""), outcome)
             if key not in self._dialog_warnings:
                 self._dialog_warnings.add(key)
-                reason = {"blocked": "暂无已验证动作", "unavailable": "按钮不可用或被遮挡",
-                          "exhausted": "已达本页三次尝试上限", "click-failed": "点击失败",
-                          "unverified": "点击后尚未确认关闭"}.get(outcome, outcome)
-                self._emit_event("DIALOG_UNRESOLVED", "warn", "content",
+                reason = DIALOG_OUTCOME_LABELS[outcome]
+                self._emit_event("DIALOG_UNRESOLVED", "warning", "content",
                                  f"{dialog['title']}：{reason}", state=(self._last_status or {}).get("state"),
-                                 data={"kind": dialog['type'], "buttons": dialog['buttons'], "reason": reason})
+                                 data={"kind": dialog['type'], "buttons": dialog['buttons'], "reason": reason, "outcome": outcome})
                 self.emit(f"[刷课] {dialog['title']} ({dialog['type']})：{reason}；按钮：{' / '.join(dialog['buttons'])}", "warn")
-        return False
+        return outcome
 
     def _handle_network_dialog(self) -> bool:
         """兼容原入口，所有提示统一使用共享策略与重试预算。"""
@@ -2499,9 +2503,10 @@ class CourseController:
             if self._session_id != quiz_session or not self._running:
                 return
             if result["state"] != "completed":
-                reason = result.get("reason") or (result.get("error") or {}).get("message") or "当前测验未完成"
-                self.emit(f"[刷课] {reason}，已停止课程任务，请人工检查。", "warn")
-                self.stop()
+                failure = result.get("error") or {}
+                reason = result.get("reason") or failure.get("message") or "当前测验未完成"
+                code = failure.get("code") or ("QUIZ_SKIPPED" if result["state"] == "skipped" else "QUIZ_FAILED")
+                self.stop(quiz_session=quiz_session, quiz_error=(code, f"{label} 测验未完成：{reason}"))
                 return
             self._last_progress_at = time.monotonic()
             completed = int((result.get("result") or {}).get("completedCount") or 0)
@@ -2512,9 +2517,8 @@ class CourseController:
                 data={"completed": completed, "skipped": 0, "failed": 0},
             )
         except Exception as error:
-            self.emit(f"[刷课] {label} 测验处理失败：{error}", "warn")
-            if self._session_id == quiz_session:
-                self.stop()
+            code = error.code if isinstance(error, AgentError) else "QUIZ_FAILED"
+            self.stop(quiz_session=quiz_session, quiz_error=(code, f"{label} 测验处理失败：{error}"))
         finally:
             if self._session_id == quiz_session:
                 with self._quiz_gate_lock:
@@ -3102,8 +3106,10 @@ class CourseController:
                 self._anti_idle_thread.start()
             return True
 
-    def stop(self) -> None:
+    def stop(self, *, quiz_session: str | None = None, quiz_error: tuple[str, str] | None = None) -> None:
         with self._lifecycle_lock:
+            if quiz_session is not None and (quiz_session != self._session_id or not self._running):
+                return
             was_active = self._running or self.ws is not None
             if self.ws is not None and self._running:
                 try:
@@ -3141,10 +3147,15 @@ class CourseController:
             if was_active:
                 elapsed_seconds = self._session_elapsed_seconds()
                 elapsed_text = self._format_elapsed(elapsed_seconds)
+                message = f"刷课已停止，用时 {elapsed_text}"
+                data = {"reason": "user", "elapsedSeconds": elapsed_seconds, "elapsed": elapsed_text}
+                if quiz_error:
+                    data.update(reason="quiz", errorCode=quiz_error[0])
+                    message = f"{message}。{redact(quiz_error[1])}"
                 self._emit_event(
-                    "SESSION_STOPPED", "info", "session", f"刷课已停止，用时 {elapsed_text}",
+                    "SESSION_STOPPED", "warning" if quiz_error else "info", "session", message,
                     state=(self._last_status or {}).get("state"),
-                    data={"reason": "user", "elapsedSeconds": elapsed_seconds, "elapsed": elapsed_text},
+                    data=data,
                 )
 
     def set_speed(self, rate: float) -> None:
