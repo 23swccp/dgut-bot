@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
          "stale_page", "stale_structure", "unsupported", "expired", "occluded", "prefilled",
-         "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable",
+         "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable", "ai_suspend_dialog",
          "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
 
 
@@ -374,6 +374,8 @@ class Lab:
             snapshot = self.evaluate("window.labSnapshot()")
             check(snapshot["starts"] == int(case == "ai_timed"), "AI 请求发生在限时测验开始前")
             calls.append(envelope["requestId"])
+            if case == "ai_suspend_dialog":
+                self.evaluate("window.labShowSuspend()")
             if case == "ai_unavailable":
                 raise UlearningAiError("synthetic AI unavailable")
             if case == "ai_route":
@@ -411,6 +413,9 @@ class Lab:
         check(browser_result["submits"] == count and browser_result["untrusted"] == 0, browser_result)
         check(browser_result["starts"] == int(case == "ai_timed"), browser_result)
         check(browser_result["next"] == count - 1, browser_result)
+        if case == "ai_suspend_dialog":
+            check(browser_result["targets"][0]["cls"] == "resume-learning", browser_result)
+            check(sum(target["cls"] == "resume-learning" for target in browser_result["targets"]) == 1, browser_result)
         return {"case": case, "seed": seed, "passed": True, "aiCalls": len(calls), "browser": browser_result, "submissions": record["submissions"]}
 
     def close(self):

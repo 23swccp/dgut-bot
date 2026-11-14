@@ -21,6 +21,7 @@
   .limit-time-mask, #cover { position: fixed; inset: 0; z-index: 20; background: #fffffffa; display: grid; place-items: center; }
   [hidden] { display: none !important; }
   #cover { z-index: 100; }
+  #alertModal { position: fixed; inset: 0; z-index: 50; background: #ffffffee; display: grid; place-content: center; }
   #server-status { color: #8a3516; }
 </style>
 <header>Agent 课件实验室 · 本地合成课程 · <span id="page-label"></span></header>
@@ -51,6 +52,14 @@
     status: document.querySelector('#server-status')?.textContent || ''});
   window.labChangePage = () => { pageId += '-changed'; document.querySelector('#page-label').textContent = pageId; };
   window.labCover = () => { const c = element('div', '', '测试遮挡层'); c.id = 'cover'; document.body.append(c); };
+  window.labShowSuspend = () => {
+    const prompt = element('div', 'modal'); prompt.id = 'alertModal';
+    const resume = element('button', 'resume-learning', '继续学习');
+    resume.onclick = e => { if (e.isTrusted) prompt.remove(); };
+    window.koLearnCourseViewModel.modalType = () => 'suspend';
+    prompt.append(element('p', '', '学习计时已暂停'), resume);
+    document.body.append(prompt);
+  };
   function values() {
     return Object.fromEntries([...document.querySelectorAll('.question-wrapper')].map(q => {
       let value;
