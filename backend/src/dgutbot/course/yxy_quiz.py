@@ -223,6 +223,7 @@ class QuizState:
     page_id: str = ""
     start_required: bool = False
     start_button: dict | None = None
+    read_ok: bool = True
 
 
 class QuizHandler:
@@ -260,12 +261,14 @@ class QuizHandler:
     def read_state(self) -> QuizState:
         value = self._evaluate(QUIZ_STATE_JS)
         if not isinstance(value, str):
-            return QuizState(present=False)
+            return QuizState(present=False, read_ok=False)
         try:
             data = json.loads(value)
         except (TypeError, ValueError):
             self._log("读取测验页面状态失败，稍后重试", "warn")
-            return QuizState(present=False)
+            return QuizState(present=False, read_ok=False)
+        if not isinstance(data, dict):
+            return QuizState(present=False, read_ok=False)
         questions = [Question(
             qid=item["qid"], finished=item["finished"], type=item["type"], title=item["title"],
             has_media=bool(item.get("hasMedia", False)), choices=item.get("choices") or [],

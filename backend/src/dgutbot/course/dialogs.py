@@ -76,6 +76,14 @@ DIALOG_STATE_JS = '(function(){' + DIALOG_POLICY_JS + 'return courseDialogState(
 DIALOG_READ_JS = '(function(){' + DIALOG_POLICY_JS + 'return {dialog: courseDialogState()};})()'
 DIALOG_READ_STAY_JS = '(function(){' + DIALOG_POLICY_JS + 'return {dialog: courseDialogState(true)};})()'
 AUTOMATIC_DIALOG_POLICIES = frozenset({'network', 'resume', 'ack', 'retry', 'stay'})
+DIALOG_OUTCOME_LABELS = {
+    'blocked': '暂无已验证动作', 'unavailable': '按钮不可用或被遮挡',
+    'exhausted': '已达本页三次尝试上限', 'click-failed': '点击失败',
+    'unverified': '点击后尚未确认关闭', 'read-failed': '无法重新读取弹窗',
+    'absent': '重新读取时弹窗已消失', 'changed': '重新读取时弹窗已变化',
+    'stopped': '关闭确认期间课程任务已停止', 'disabled': '自动处理弹窗已关闭',
+    'limit': '连续处理弹窗次数已达上限',
+}
 
 
 def handle_dialog(evaluate, click, pause, running, attempts, *, allowed=AUTOMATIC_DIALOG_POLICIES, expected=None, prefer_stay=False):

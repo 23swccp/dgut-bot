@@ -7,6 +7,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from dgutbot.agent.protocol import AgentError
+from dgutbot.course.dialogs import DIALOG_OUTCOME_LABELS
 from dgutbot.course.quiz_requests import AnswerValidator
 from dgutbot.course.yxy_quiz import QuizExecutor, QuizReader, QuizState
 from dgutbot.experimental.ulearning_ai import UlearningAiError
@@ -157,9 +158,20 @@ class UlearningAiAnswerProvider:
         # 请求前绑定运行会话；AI 响应不能借用停止后新启动的同页任务。
         session_id = controller._session_id
         reader = QuizReader(handler)
+
+        def check_read(state: QuizState, status: dict[str, Any]) -> None:
+            if not state.read_ok:
+                if status.get("connected") is False:
+                    raise AgentError("QUIZ_CONNECTION_LOST", "无法读取测验状态，课件页浏览器连接已断开。")
+                raise AgentError("QUIZ_READ_FAILED", "无法读取测验状态，浏览器未返回有效的测验快照。")
+            if not state.present:
+                raise AgentError("QUIZ_PAGE_CHANGED", "当前页面的测验区域已不可见。")
+
         initial = reader.read()
-        if not initial.present or not initial.page_id:
-            raise AgentError("QUIZ_PAGE_CHANGED", "The quiz page is unavailable or changed.")
+        if not initial.present:
+            check_read(initial, controller.status_snapshot())
+        if not initial.page_id:
+            raise AgentError("QUIZ_PAGE_CHANGED", "无法确认测验的页面标识。")
         initial_page_id = initial.page_id
 
         def session_guard() -> QuizState:
@@ -167,19 +179,27 @@ class UlearningAiAnswerProvider:
             for dismissed in range(4):
                 status = controller.status_snapshot()
                 page_id = str((status.get("page") or {}).get("id") or "")
-                if not controller._running or controller._session_id != session_id or page_id != initial_page_id:
-                    raise AgentError("QUIZ_PAGE_CHANGED", "The course session or page has changed.")
+                if not controller._running or controller._session_id != session_id:
+                    raise AgentError("QUIZ_PAGE_CHANGED", "刷课会话已停止或已切换。")
                 state = reader.read()
-                if not state.present or state.page_id != initial_page_id:
-                    break
+                check_read(state, status)
+                if page_id != initial_page_id or state.page_id != initial_page_id:
+                    raise AgentError("QUIZ_PAGE_CHANGED", "测验所在课件页已切换或无法确认。")
                 if not state.modal:
                     return state
                 signature = state.modal.get("signature")
-                if (dismissed == 3 or not config.auto_dismiss_dialog or not signature
-                        or state.modal.get("page") != initial_page_id
-                        or not controller._handle_classified_dialog(expected=signature, quiz_session=session_id)):
-                    break
-            raise AgentError("QUIZ_PAGE_CHANGED", "The quiz page is unavailable or changed.")
+                if not config.auto_dismiss_dialog:
+                    outcome = "disabled"
+                elif dismissed == 3:
+                    outcome = "limit"
+                elif not signature or state.modal.get("page") != initial_page_id:
+                    outcome = "changed"
+                else:
+                    outcome = controller._process_classified_dialog(expected=signature, quiz_session=session_id)
+                if outcome != "dismissed":
+                    title = state.modal.get("title") or "未知弹窗"
+                    explanation = DIALOG_OUTCOME_LABELS[outcome]
+                    raise AgentError("QUIZ_DIALOG_BLOCKED", f"测验被弹窗「{title}」挡住，{explanation}。")
 
         initial = session_guard()
         if initial.start_required:
@@ -188,8 +208,8 @@ class UlearningAiAnswerProvider:
                 raise AgentError("QUIZ_APPLY_FAILED", "The timed quiz could not be started.")
             initial = session_guard()
         all_questions = reader.questions(initial)
-        if not initial.present or not initial.page_id or not all_questions:
-            raise AgentError("QUIZ_PAGE_CHANGED", "The quiz page is unavailable or changed.")
+        if not all_questions:
+            raise AgentError("QUIZ_PAGE_CHANGED", "当前测验没有可读取的未完成题目。")
         eligible = [question for question in all_questions if self._enabled(question, config)]
         if not eligible:
             return {"state": "skipped", "reason": "当前测验没有已启用的可答题型"}
@@ -199,7 +219,7 @@ class UlearningAiAnswerProvider:
         def guard() -> QuizState:
             state = session_guard()
             if state.start_required or reader.questions(state) != all_questions:
-                raise AgentError("QUIZ_PAGE_CHANGED", "The quiz structure has changed.")
+                raise AgentError("QUIZ_PAGE_CHANGED", "测验题目或答题状态已变化。")
             return state
 
         self.emit(f"[刷课] 已提取 {len(eligible)} 道待答题，准备交给课程 AI。", "info")

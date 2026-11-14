@@ -104,7 +104,7 @@ class DialogTests(unittest.TestCase):
         prompt = dialog('incomplete', 'navigation')
         controller.eval_js = Mock(return_value={'dialog': prompt})
         controller.action_executor.execute_click = Mock()
-        self.assertFalse(controller._handle_classified_dialog(expected=prompt['signature'], quiz_session='quiz-session'))
+        self.assertEqual(controller._process_classified_dialog(expected=prompt['signature'], quiz_session='quiz-session'), 'blocked')
         controller.action_executor.execute_click.assert_not_called()
 
     def test_unknown_warning_is_deduplicated_and_does_not_need_manual_confirmation(self):

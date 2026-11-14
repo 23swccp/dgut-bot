@@ -252,7 +252,7 @@ class InjectScriptTests(unittest.TestCase):
         controller.action_executor.execute_click.assert_not_called()
         controller.action_executor.insert_text.assert_not_called()
         controller._emit_event.assert_not_called()
-        controller.stop.assert_called_once()
+        controller.stop.assert_called_once_with(quiz_session="session", quiz_error=("QUIZ_FAILED", "AI 测验未完成：invalid JSON"))
         self.assertFalse(controller._quiz_busy)
 
     def test_old_ai_worker_cannot_stop_restarted_session(self):
@@ -277,21 +277,23 @@ class InjectScriptTests(unittest.TestCase):
         self.assertTrue(controller._quiz_busy)
 
     def test_ai_skip_stops_without_claiming_submission(self):
-        events = []
-        controller = CourseController(lambda *args: events.append(args))
+        controller = CourseController(lambda *_: None)
         controller._active_config = CourseConfig(quiz_mode="ai")
         controller._session_id = "session"
         controller._running = True
         controller.eval_js = Mock(return_value=True)
-        controller.stop = Mock()
         controller._emit_event = Mock()
         controller._ai_answer_provider = Mock()
         controller._ai_answer_provider.answer.return_value = {"state": "skipped", "reason": "当前题型未启用"}
         with patch('yxy_course.QuizHandler') as handler:
             controller._run_quiz_handler()
-        controller.stop.assert_called_once()
-        controller._emit_event.assert_not_called()
-        self.assertTrue(any("当前题型未启用" in args[0] for args in events))
+        self.assertFalse(controller._running)
+        controller._emit_event.assert_called_once()
+        args, kwargs = controller._emit_event.call_args
+        self.assertEqual(args[:3], ("SESSION_STOPPED", "warning", "session"))
+        self.assertIn("当前题型未启用", args[3])
+        self.assertEqual(kwargs["data"]["reason"], "quiz")
+        self.assertEqual(kwargs["data"]["errorCode"], "QUIZ_SKIPPED")
 
     def test_script_observes_video_and_completion_state(self):
         self.assertIn("loadedmetadata", INJECT_JS)
