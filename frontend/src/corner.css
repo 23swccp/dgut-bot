@@ -1156,29 +1156,6 @@
 .page-plan span { flex: 0 0 auto; color: #8a94a5; }
 .page-plan strong { min-width: 0; color: #34405a; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.course-event-log {
-  flex: none;
-  min-height: 0;
-  overflow: visible;
-  padding: 18px 28px 8px 70px;
-  font: 13px/1.7 "Cascadia Mono", "Microsoft YaHei UI", monospace;
-}
-
-.course-event {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 10px;
-  padding: 2px 0;
-  color: #384354;
-}
-
-.course-event time { color: #929baa; }
-.course-event.success span { color: #00884b; }
-.course-event.warning span { color: #a96200; }
-.course-event.error span { color: #c23b3b; }
-.course-local-log { color: #818b9b; }
-.event-empty { padding: 16px 0; color: #9aa3b1; }
-
 .learning-terminal .command {
   flex: none;
   padding-top: 0;
