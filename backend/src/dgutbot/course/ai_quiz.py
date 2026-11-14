@@ -158,20 +158,30 @@ class UlearningAiAnswerProvider:
         session_id = controller._session_id
         reader = QuizReader(handler)
         initial = reader.read()
-        if not initial.present or not initial.page_id or initial.modal:
+        if not initial.present or not initial.page_id:
             raise AgentError("QUIZ_PAGE_CHANGED", "The quiz page is unavailable or changed.")
+        initial_page_id = initial.page_id
 
         def session_guard() -> QuizState:
-            status = controller.status_snapshot()
-            page_id = str((status.get("page") or {}).get("id") or "")
-            if not controller._running or controller._session_id != session_id or page_id != initial.page_id:
-                raise AgentError("QUIZ_PAGE_CHANGED", "The course session or page has changed.")
-            state = reader.read()
-            if not state.present or state.page_id != initial.page_id or state.modal:
-                raise AgentError("QUIZ_PAGE_CHANGED", "The quiz page is unavailable or changed.")
-            return state
+            # 弹窗关闭后，重新读取页面和题目；点击前取得的状态不能用于作答。
+            for dismissed in range(4):
+                status = controller.status_snapshot()
+                page_id = str((status.get("page") or {}).get("id") or "")
+                if not controller._running or controller._session_id != session_id or page_id != initial_page_id:
+                    raise AgentError("QUIZ_PAGE_CHANGED", "The course session or page has changed.")
+                state = reader.read()
+                if not state.present or state.page_id != initial_page_id:
+                    break
+                if not state.modal:
+                    return state
+                signature = state.modal.get("signature")
+                if (dismissed == 3 or not config.auto_dismiss_dialog or not signature
+                        or state.modal.get("page") != initial_page_id
+                        or not controller._handle_classified_dialog(expected=signature, quiz_session=session_id)):
+                    break
+            raise AgentError("QUIZ_PAGE_CHANGED", "The quiz page is unavailable or changed.")
 
-        session_guard()
+        initial = session_guard()
         if initial.start_required:
             self.emit("[刷课] 正在启动限时测验，启动后提取题目。", "info")
             if not handler.ensure_started():

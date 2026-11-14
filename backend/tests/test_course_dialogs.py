@@ -96,6 +96,17 @@ class DialogTests(unittest.TestCase):
         self.assertFalse(controller._handle_classified_dialog())
         controller.eval_js.assert_not_called()
 
+    def test_ai_quiz_dismissal_does_not_click_navigation_dialog(self):
+        controller = CourseController(lambda *_: None)
+        controller._running = controller._quiz_busy = True
+        controller._session_id = 'quiz-session'
+        controller._active_config = CourseConfig(quiz_mode='ai')
+        prompt = dialog('incomplete', 'navigation')
+        controller.eval_js = Mock(return_value={'dialog': prompt})
+        controller.action_executor.execute_click = Mock()
+        self.assertFalse(controller._handle_classified_dialog(expected=prompt['signature'], quiz_session='quiz-session'))
+        controller.action_executor.execute_click.assert_not_called()
+
     def test_unknown_warning_is_deduplicated_and_does_not_need_manual_confirmation(self):
         events = []
         controller = CourseController(lambda *_: None, emit_event=lambda *args, **kwargs: events.append(args))

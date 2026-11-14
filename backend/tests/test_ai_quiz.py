@@ -267,6 +267,36 @@ def test_provider_rejects_changes_during_ai_request_without_retry_or_model_switc
     assert bridge.calls == 1
 
 
+@pytest.mark.parametrize("outcome", ["resume", "changed", "disabled"])
+def test_provider_rechecks_quiz_after_dismissing_dialog(outcome):
+    page, bridge, _logs, provider, controller = provider_setup([])
+    dismissed = []
+
+    def answer(request_id, questions):
+        page.state["modal"] = {"page": "page", "signature": "suspend-dialog"}
+        return valid_for(request_id, questions)
+
+    def dismiss(*, expected, quiz_session):
+        dismissed.append((expected, quiz_session))
+        page.state["modal"] = None
+        if outcome == "changed":
+            page.state["questions"][0]["title"] = "new question"
+        return True
+
+    bridge.values = [answer]
+    controller._handle_classified_dialog = dismiss
+    config = CourseConfig(quiz_mode="ai", auto_dismiss_dialog=outcome != "disabled")
+    if outcome == "resume":
+        assert provider.answer(page.handler(), controller, config)["state"] == "completed"
+        assert page.actions.count(("click", 90)) == 1
+    else:
+        with pytest.raises(AgentError, match="changed"):
+            provider.answer(page.handler(), controller, config)
+        assert page.actions == []
+    assert dismissed == ([] if outcome == "disabled" else [("suspend-dialog", "session")])
+    assert bridge.calls == 1
+
+
 def test_provider_starts_timed_quiz_before_reading_new_questions():
     page, bridge, _logs, provider, controller = provider_setup([])
     page.state.update(startRequired=True, startButton={"x": 50, "y": 50, "enabled": True, "pointMatches": True})

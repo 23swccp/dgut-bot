@@ -2329,13 +2329,20 @@ class CourseController:
         elif self.state_machine.state == CourseState.WAITING_PAGE_CONFIRM:
             self._attempt_navigation_if_ready(recovery=True)
 
-    def _handle_classified_dialog(self) -> bool:
+    def _handle_classified_dialog(self, *, expected: str | None = None, quiz_session: str | None = None) -> bool:
         config = self._active_config
-        if not self._running or self._quiz_busy or not config or not config.auto_dismiss_dialog:
+        session_id = self._session_id
+        if not self._running or not config or not config.auto_dismiss_dialog:
+            return False
+        if quiz_session is not None:
+            if not expected or quiz_session != session_id or not self._quiz_busy or config.quiz_mode != "ai":
+                return False
+        elif self._quiz_busy:
             return False
         outcome, dialog = handle_dialog(
             self.eval_js, self.action_executor.execute_click, self._stop_event.wait,
-            lambda: self._running and not self._stop_event.is_set(), self._dialog_attempts,
+            lambda: self._running and self._session_id == session_id and not self._stop_event.is_set(),
+            self._dialog_attempts, expected=expected,
         )
         if outcome == "dismissed":
             # 仅证明这一层提示关闭；资源、记录和交卷结果由后续快照核实。
