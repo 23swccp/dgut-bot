@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
-import {
-  formatClock, mergeEvents, visibleCourseEvents,
-  type CourseEvent, type CourseStatus,
-} from "./courseObservability";
+import { type CourseEvent, type CourseStatus } from "./courseObservability";
 import { type UpdateStatus } from "./updateClient";
 import { UpdateSettings } from "./UpdateSettings";
 import { UpdateDialog, useUpdateDialog } from "./UpdateDialog";
@@ -28,7 +25,7 @@ type Course = { id: number; name: string; teacherName: string };
 type Classroom = { id: number; title: string; beginTime: string; statusLabel: string; ended?: boolean };
 type AppInfo = { appName: string; version: string; repo: string };
 type SignMonitorStatus = { running: boolean; state: string; courseName: string; intervalSeconds: number; round: number; startedAt: string; lastCheck: string; lastResult: string; classroomId?: number | null; classroomName?: string; classrooms?: Classroom[]; classroomSelectionRequired?: boolean; activityMonitoring?: boolean; recoveryPending?: boolean; membershipPhase?: string; recoveryCourseName?: string; recoveryError?: string };
-type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; quizAutoAnswerArmed?: boolean; login?: LoginStatus; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
+type BackendResult = { ok: boolean; error?: string; courses?: Course[]; course?: Course | null; config?: AppConfig; login?: LoginStatus; events?: CourseEvent[]; latestSeq?: number; status?: CourseStatus; signStatus?: SignMonitorStatus; scan?: CourseScanStatus; info?: AppInfo; update?: UpdateStatus };
 
 const loginPayload = { url: "https://lms.dgut.edu.cn" };
 const moduleIcons: Record<Page, LucideIcon> = {
@@ -60,17 +57,13 @@ function App() {
   const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null);
   const [command, setCommand] = useState("");
   const [courseCursor, setCourseCursor] = useState(0);
-  const [learningCommand, setLearningCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [signEvents, setSignEvents] = useState<SignEvent[]>(() => [{ id: "initial", time: new Date().toISOString(), message: "正在连接本地后端…", level: "info" }]);
   const [signStatus, setSignStatus] = useState<SignMonitorStatus>({ running: false, state: "idle", courseName: "", intervalSeconds: 5, round: 0, startedAt: "", lastCheck: "", lastResult: "等待启动" });
   const [selectedSignCourse, setSelectedSignCourse] = useState<Course | null>(null);
-  const [learningLogs, setLearningLogs] = useState<string[]>([]);
-  const [courseEvents, setCourseEvents] = useState<CourseEvent[]>([]);
-  const [courseStatus, setCourseStatus] = useState<CourseStatus>({ running: false, connected: false, controllerState: "IDLE" });
+  const [learningError, setLearningError] = useState("");
   const [courses, setCourses] = useState<Course[]>([]);
   const [config, setConfig] = useState<AppConfig>({});
-  const playbackRate = config.course_playback_rate ?? 8;
   const [settingsWriter] = useState(() => new SettingsAutosave(call));
   const [helperRunning, setHelperRunning] = useState(false);
   const [courseScan, setCourseScan] = useState<CourseScanStatus>({ state: "idle", loggedIn: false, scannedCourses: 0, totalCourses: 0, unfinishedCount: 0, groups: [], failures: [], cachedAt: "", fromCache: false, error: "", openPhase: "idle", openError: "", selectedId: "" });
@@ -87,11 +80,7 @@ function App() {
   const updateDialog = useUpdateDialog(updateStatus);
   const signLogRef = useRef<HTMLDivElement>(null);
   const commandRef = useRef<HTMLInputElement>(null);
-  const learningEndRef = useRef<HTMLPreElement>(null);
-  const learningLogRef = useRef<HTMLDivElement>(null);
-  const courseLastSeqRef = useRef(0);
-  const learningAutoScrollRef = useRef(true);
-  const learningCommandRef = useRef<HTMLInputElement>(null);
+  const signEventCursorRef = useRef(0);
   const coursePickerRef = useRef<HTMLDivElement>(null);
   const append = (line: string, level: CourseEvent["level"] = "info") => setSignEvents(items => addSignEvent(items, {
     id: `local-${Date.now()}-${Math.random()}`,
@@ -99,7 +88,6 @@ function App() {
     message: line,
     level,
   }));
-  const appendLearning = (line: string) => setLearningLogs(items => [...items, `[${formatClock(new Date().toISOString())}] ${line}`].slice(-80));
   const acceptLoginStatus = (login?: LoginStatus) => {
     if (!login) return;
     setLoginStatus(login);
@@ -124,22 +112,16 @@ function App() {
 
   useEffect(() => { const log = signLogRef.current; log?.scrollTo({ top: log.scrollHeight, behavior: "smooth" }); }, [signEvents]);
   useEffect(() => {
-    const target = learningLogRef.current;
-    if (target && learningAutoScrollRef.current) target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
-  }, [learningLogs, courseEvents]);
-  useEffect(() => {
     if (phase === "courses") setCourseCursor(firstSignChoiceCursor(matchingCourses));
     if (phase === "classrooms") setCourseCursor(firstSignChoiceCursor(matchingClassrooms));
   }, [command, courses, phase]);
   useEffect(() => { coursePickerRef.current?.querySelector(".course-option.active")?.scrollIntoView({ block: "nearest" }); }, [courseCursor]);
   useEffect(() => { setLessonCursorId(""); }, [lessonQuery]);
   useEffect(() => {
-    if (busy) return;
-    const target = page === "terminal" ? commandRef : page === "learning" && courseSection === "learning" ? learningCommandRef : null;
-    if (!target) return;
-    const frame = requestAnimationFrame(() => target.current?.focus());
+    if (busy || page !== "terminal") return;
+    const frame = requestAnimationFrame(() => commandRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [page, courseSection, busy]);
+  }, [page, busy]);
   useEffect(() => {
     void call("get_app_info").then(result => { if (result.ok && result.info) setAppInfo(result.info); });
     void call("get_settings").then(result => {
@@ -200,18 +182,16 @@ function App() {
   useEffect(() => {
     let disposed = false;
     const pullEvents = async () => {
-      try { const result = await call("get_events", { afterSeq: courseLastSeqRef.current }); if (!disposed) {
+      try { const result = await call("get_events", { afterSeq: signEventCursorRef.current }); if (!disposed) {
         const events = result.events || [];
-        const learning = events.filter(event => (event.sessionId.startsWith("course-") || event.category !== "general") && event.category !== "command");
         const general = events.filter(event => event.category === "general");
-        if (learning.length) setCourseEvents(items => mergeEvents(items, learning));
         general.forEach(event => setSignEvents(items => addSignEvent(items, {
           id: `backend-${event.seq}`,
           time: event.time,
           message: event.message,
           level: event.level,
         })));
-        courseLastSeqRef.current = Math.max(courseLastSeqRef.current, result.latestSeq || 0);
+        signEventCursorRef.current = Math.max(signEventCursorRef.current, result.latestSeq || 0);
       } }
       catch { /* 本地服务启动和关闭阶段安静忽略。 */ }
     };
@@ -238,7 +218,6 @@ function App() {
     const pullStatus = async () => {
       const result = await call("get_course_helper_status");
       if (!disposed && result.ok && result.status) {
-        setCourseStatus(result.status);
         setHelperRunning(Boolean(result.status.running));
       }
     };
@@ -355,6 +334,7 @@ function App() {
     setBusy(false);
   }
   async function refreshCourseScan(force = true) {
+    setLearningError("");
     const result = await call("start_course_scan", { force });
     if (result.ok && result.scan) setCourseScan(result.scan);
   }
@@ -370,23 +350,23 @@ function App() {
   }
   async function exitCourseLearning() {
     if (exitingLearning) return;
+    setLearningError("");
     setExitingLearning(true);
     const result = await call("stop_course_helper");
     setExitingLearning(false);
     if (!result.ok) {
-      appendLearning(result.error || "退出刷课失败。");
+      setLearningError(result.error || "退出刷课失败。");
       return;
     }
     setHelperRunning(false);
-    setCourseEvents([]);
-    setLearningLogs([]);
     setCourseScan(current => ({ ...current, openPhase: "idle", openError: "", selectedId: "" }));
   }
   async function openScannedLesson(item: LessonItem) {
     if (!item.canAutoOpen || learningActive) return;
+    setLearningError("");
     setLessonCursorId(item.id);
     const result = await call("open_scanned_course", { itemId: item.id });
-    if (!result.ok) appendLearning(result.error || "自动打开课件失败。");
+    if (!result.ok) setLearningError(result.error || "自动打开课件失败。");
     else if (result.scan) setCourseScan(result.scan);
   }
   function handleLessonKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
@@ -395,47 +375,6 @@ function App() {
     else if (event.key === "Enter" && filteredLessons[lessonCursor]) { event.preventDefault(); void openScannedLesson(filteredLessons[lessonCursor]); }
     else if (event.key === "Escape") setLessonQuery("");
   }
-  async function runLearning() {
-    if (busy) return;
-    const input = learningCommand.trim(); const normalized = input.toLowerCase(); setLearningCommand("");
-    if (normalized === "clear" || input === "清屏") { setLearningLogs([]); setCourseEvents([]); return; }
-    if (normalized === "open" || input === "打开") {
-      appendLearning("> open"); appendLearning("正在打开优学院课件网站…");
-      await call("start_browser", { url: "https://ua.dgut.edu.cn" }); return;
-    }
-    if (normalized === "stop" || input === "/" || input === "停止") {
-      appendLearning("> stop"); setBusy(true); const result = await call("stop_course_helper"); setBusy(false);
-      if (result.ok) { setHelperRunning(false); appendLearning("刷课已停止。"); } else appendLearning(result.error || "停止刷课失败。");
-      return;
-    }
-    const speed = input.match(/^(?:speed|倍速)\s+([0-9]+(?:\.[0-9]+)?)$/i);
-    if (speed) {
-      const rate = Number(speed[1]);
-      if (rate < 1 || rate > 16) { appendLearning("倍速范围为 1–16。"); return; }
-      appendLearning(`> speed ${rate}`); setBusy(true);
-      const saved = await settingsWriter.save("course_playback_rate", "update_settings", { course_playback_rate: rate });
-      if (!saved.ok) { setBusy(false); appendLearning(saved.error || "保存倍速失败"); return; }
-      loadConfig(saved.config || { course_playback_rate: rate });
-      if (helperRunning) await call("set_course_speed", { rate });
-      setBusy(false); appendLearning(`视频倍速已设为 ${rate}×。`); return;
-    }
-    if (!input || normalized === "start" || input === "开始") {
-      appendLearning(input ? "> start" : "> Enter"); appendLearning("正在启动刷课…"); setBusy(true);
-      if (!await settingsWriter.flush()) { setBusy(false); appendLearning("设置尚未保存成功，请返回设置页检查。"); return; }
-      const result = await call("start_course_helper"); setBusy(false);
-      if (result.ok) {
-        setHelperRunning(true);
-        if (result.quizAutoAnswerArmed) {
-          appendLearning("刷课已启动；自动答题已启用。");
-        } else appendLearning("刷课已启动。");
-      }
-      else appendLearning(result.error || "未找到已打开的课件学习页，请先输入 open。");
-      return;
-    }
-    appendLearning(`> ${input}`);
-    appendLearning("可用命令：start、stop、open、speed 8、clear。");
-  }
-
   async function run() {
     if (busy) return;
     const input = command.trim();
@@ -497,12 +436,7 @@ function App() {
   const nextCheckSeconds = signStatus.running && lastCheckMs
     ? Math.max(0, signStatus.intervalSeconds - Math.floor((Date.now() - lastCheckMs) / 1000))
     : 0;
-  const displayedCourseEvents = visibleCourseEvents(courseEvents, true);
   const learningActive = helperRunning || ["opening", "waiting_page", "validating", "connected", "starting", "started"].includes(courseScan.openPhase);
-  const handleLearningScroll = () => {
-    const target = learningLogRef.current;
-    if (target) learningAutoScrollRef.current = target.scrollHeight - target.scrollTop - target.clientHeight < 36;
-  };
 
   return <div className="app-shell"><main className="content">
     {notice && <div className="toast" role="alert" onClick={() => setNotice("")}>{notice}</div>}
@@ -536,6 +470,7 @@ function App() {
             {courseScan.state !== "scanning" && courseScan.failures.length > 0 && <button className="secondary compact" disabled={courseScan.stopping} onClick={() => void refreshCourseScan(false)}>重试失败课程</button>}
             <button className="secondary compact learning-exit-button" disabled={!learningActive || exitingLearning} onClick={() => void exitCourseLearning()}>{exitingLearning ? "退出中…" : "退出刷课"}</button>
           </div></div>
+          {learningError && <div className="lesson-scan-message warning" role="alert">{learningError}</div>}
           {courseScan.state === "auth_required" ? <div className="lesson-scan-message warning">登录状态不可用。请在程序浏览器中完成登录，再点击“重新扫描”。</div> : <>
             <div className="learning-search-line"><i aria-hidden="true">›</i><input className="lesson-search" aria-label="搜索未完成课件" value={lessonQuery} onChange={event => setLessonQuery(event.target.value)} onKeyDown={handleLessonKeyDown} placeholder="搜索课程或课件" /></div>
             {courseScan.openPhase !== "idle" && <div className={`lesson-open-phase ${courseScan.openError ? "warning" : ""}`} role="status"><strong>{openPhaseLabel(courseScan.openPhase)}</strong>{courseScan.openError && <span>{courseScan.openError}</span>}{["failed", "timeout"].includes(courseScan.openPhase) && selectedLesson && <button className="secondary compact" onClick={() => void openScannedLesson(selectedLesson)}>重试打开</button>}</div>}
@@ -552,15 +487,6 @@ function App() {
                     <button type="button" role="option" aria-selected={index === lessonCursor} aria-label={item.canAutoOpen ? `${item.title}，${item.type}，${lessonProgress(item)}，打开` : `${item.title}：${item.unavailableReason}`} className={`lesson-row ${index === lessonCursor ? "active" : ""} ${item.canAutoOpen ? "" : "unavailable"}`} onMouseEnter={() => setLessonCursorId(item.id)} onClick={() => void openScannedLesson(item)} disabled={!item.canAutoOpen || learningActive}>
                       <span><strong>{item.title}</strong>{chapterPath && chapterPath !== item.title && <small>{chapterPath}</small>}</span><em>{item.type}</em><b>{lessonProgress(item)}</b>{!item.canAutoOpen && <i>{item.unavailableReason}</i>}
                     </button>
-                    {runningHere && <section className="lesson-inline-record" aria-label={`${item.title}运行记录`}>
-                      <header><i aria-hidden="true"/><strong>运行记录</strong></header>
-                      <div className="course-event-log" ref={learningLogRef} onScroll={handleLearningScroll}>
-                        {displayedCourseEvents.length === 0 && learningLogs.length === 0 && <div className="event-empty">正在等待运行事件…</div>}
-                        {displayedCourseEvents.map(event => <div className={`course-event ${event.level}`} key={event.seq}><time>{formatClock(event.time)}</time><span>{event.message}</span></div>)}
-                        {learningLogs.map((line, logIndex) => <div className="course-local-log" key={`${logIndex}-${line}`}>{line}</div>)}
-                        <span ref={learningEndRef}/>
-                      </div>
-                    </section>}
                   </div>;
                 })}</div>
               </section>)}
