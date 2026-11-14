@@ -37,24 +37,6 @@ export type CourseStatus = {
   resourceError?: { code: string; message: string; current: number; total: number } | null;
 };
 
-export const MAX_COURSE_EVENTS = 500;
-
-export function mergeEvents(current: CourseEvent[], incoming: CourseEvent[], limit = MAX_COURSE_EVENTS) {
-  const bySeq = new Map(current.map(event => [event.seq, event]));
-  for (const event of incoming) if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-limit);
-}
-
-export function visibleCourseEvents(events: CourseEvent[], detailed: boolean) {
-  return events.filter(event => detailed || event.category !== "debug");
-}
-
-export function formatClock(value?: string) {
-  if (!value) return "--:--:--";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "--:--:--" : date.toLocaleTimeString("zh-CN", { hour12: false });
-}
-
 export function formatDuration(value?: number) {
   const seconds = Math.max(0, Math.floor(Number(value) || 0));
   const hours = Math.floor(seconds / 3600);

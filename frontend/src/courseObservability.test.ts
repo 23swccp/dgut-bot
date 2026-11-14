@@ -1,22 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { connectionLabel, formatPagePlan, mergeEvents, runStateLabel, visibleCourseEvents, type CourseEvent } from "./courseObservability";
-
-const event = (seq: number, category = "navigation"): CourseEvent => ({
-  seq, time: "2026-08-28T21:09:37+08:00", sessionId: "course-test", code: "PAGE_CHANGED",
-  level: "success", category, message: `event-${seq}`, page: {}, data: {},
-});
+import { connectionLabel, formatPagePlan, runStateLabel } from "./courseObservability";
 
 describe("course observability", () => {
-  it("merges cursor batches without duplicates and keeps sequence order", () => {
-    expect(mergeEvents([event(1), event(2)], [event(2), event(3)]).map(item => item.seq)).toEqual([1, 2, 3]);
-  });
-
-  it("hides internal details in normal mode", () => {
-    const events = [event(1), event(2, "debug")];
-    expect(visibleCourseEvents(events, false).map(item => item.seq)).toEqual([1]);
-    expect(visibleCourseEvents(events, true)).toHaveLength(2);
-  });
-
   it("restores running and recovery labels from backend status", () => {
     expect(runStateLabel({ running: true, resourceError: { code: "parse-failed", message: "解析失败", current: 1, total: 111 } })).toBe("课件异常");
     expect(runStateLabel({ running: true })).toBe("运行中");
