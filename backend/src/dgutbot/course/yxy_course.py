@@ -669,12 +669,15 @@ INJECT_JS = r"""
 
   function slideDocuments() {
     const page = pageState().page;
+    const recordComplete = currentPageRecordComplete();
     return Array.from(document.querySelectorAll('.doc-wrapper')).filter(wrapper =>
       wrapper.querySelector('.doc-card.ppt') && visible(wrapper.querySelector('iframe.doc-iframe'))
     ).map(wrapper => {
       const resource = stableHash(wrapper.querySelector('iframe.doc-iframe').src);
       const progress = (window.__yxy_slide_progress || {})[resource];
-      return progress && progress.page === page ? progress : {resource: resource, current: 0, total: 0, completed: false};
+      if (!progress || progress.page !== page) return {resource: resource, current: 0, total: 0, completed: false};
+      if (progress.skipped) return {...progress, completed: recordComplete, error: recordComplete ? null : progress.error};
+      return progress;
     });
   }
 
@@ -1221,7 +1224,7 @@ class PagePlan:
         slides = status.get("slideDocuments") or []
         slides_pending = any(item.get('error') or not item.get("completed") for item in slides)
         slides_error = any(item.get('error') for item in slides)
-        # 可见 PPT 有独立页码任务，不能用课程目录勾选跳过尚未翻阅的张数。
+        # 可见 PPT 有独立页码任务，播放器明确无法显示且平台已确认完成时才允许跳过。
         if bool(state.get("recordComplete")) and not status.get("quizStartPending") and not slides_pending:
             return cls((PageTask("record", "completed", 1),), "navigation", True)
 
@@ -2037,9 +2040,9 @@ class CourseController:
         value = self.eval_js(
             "(function(){try{var r=window.koLearnCourseViewModel;"
             "var o=function(v){return typeof v==='function'?v():v};"
-            "var c=r&&o(r.course),p=r&&o(r.currentPage);return {"
+            "var c=r&&o(r.course),p=r&&o(r.currentPage),rec=p&&o(p.record);return {"
             "courseName:String(c&&o(c.name)||''),page:String(p&&o(p.id)||''),"
-            "pageName:String(p&&o(p.name)||'')};}catch(e){return null;}})()",
+            "pageName:String(p&&o(p.name)||''),recordComplete:Boolean(rec&&o(rec.status))};}catch(e){return null;}})()",
             timeout=5.0,
         )
         return dict(value) if isinstance(value, dict) else None
@@ -2782,21 +2785,33 @@ class CourseController:
         previous = self._slide_progress.get(key)
 
         def publish(observed, completed=False):
-            old_error = (self._slide_progress.get(key) or {}).get('error')
+            old_progress = self._slide_progress.get(key) or {}
+            old_error = old_progress.get('error')
             progress = {name: observed.get(name, 0) for name in ('resource', 'current', 'total')}
             progress.update(page=page, completed=completed, ready=observed.get('state') == 'slides')
             if observed.get('error'):
                 progress['error'] = observed['error']
+            error = progress.get('error')
+            if error and error['code'] == 'page-info-missing' and self._active_config and self._active_config.auto_next:
+                # 等待读取 iframe 期间，用户可能已切页；只使用同一课件的完成记录。
+                record = self._read_bootstrap_state() or {}
+                if record.get('page') == page and record.get('recordComplete'):
+                    progress.update(skipped=True, completed=True)
             self._slide_progress[key] = progress
             self.eval_js('window.__yxy_slide_progress=window.__yxy_slide_progress||{};'
                          'window.__yxy_slide_progress[' + json.dumps(resource) + ']=' + json.dumps(progress))
-            error = progress.get('error')
-            if error:
+            if error and not (progress.get('skipped') and old_progress.get('skipped')):
                 self._stall_active = False
                 self._stall_reason = ''
                 self._watchdog_recoveries = 0
                 self._last_recovery_event_attempt = 0
-                if error != old_error:
+            if progress.get('skipped'):
+                if not old_progress.get('skipped'):
+                    self._emit_event('RESOURCE_SKIPPED', 'warning', 'content',
+                                     'PPT 生成的页码信息丢失，平台已确认本页完成，准备进入下一页。',
+                                     state={'page': page}, data={'code': error['code'], 'current': progress['current'], 'total': progress['total']})
+            elif error:
+                if error != old_error or old_progress.get('skipped'):
                     position = f"（第 {progress['current']}/{progress['total']} 张）" if progress['total'] else ''
                     self._emit_event('RESOURCE_ERROR', 'error', 'content',
                                      error['message'] + position + '，已停止翻页并等待资源恢复；不会自动刷新或跳过。',
@@ -2843,13 +2858,15 @@ class CourseController:
             if self._stop_event.wait(0.05) or not self._running:
                 break
             after = read()
-            if not isinstance(after, dict) or after.get('resource') != resource or after.get('total') != total:
+            if not isinstance(after, dict) or after.get('resource') != resource:
                 break
             if str((self._read_bootstrap_state() or {}).get('page') or '') != page:
                 break
             if after.get('state') == 'slides-error':
                 publish(after)
                 return {**after, 'page': page}
+            if after.get('total') != total:
+                break
             if after.get('state') == 'slides' and after.get('current') == current + 1:
                 publish(after)
                 self._last_progress_at = time.monotonic()

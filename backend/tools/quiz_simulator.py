@@ -101,13 +101,73 @@ def run_slide_fixture(backend, debug_port, web_port, cross_origin):
         stats = (controller._cdp_eval('window.stats',session_id=item['sessionId'])['result']['value'] if item.get('sessionId')
                  else backend.evaluate("document.querySelector('#slideFixture iframe').contentWindow.stats"))
         assert stats=={'next':2,'animation':0,'trusted':True}, stats
+
+        # 实页提示位于 PageInfo，播放器的通用消息区仍为隐藏状态。
+        controller._cdp_eval("document.querySelector('#PageIndex').textContent='1';"
+                             "document.querySelector('#PageCount').textContent='0';"
+                             "document.querySelector('#PageInfo').hidden=false;"
+                             "document.querySelector('#PageInfo').textContent='!生成的页码信息丢失!'",
+                             context_id=context_id, session_id=item.get('sessionId'))
+        backend.evaluate("""(() => {
+          window.slideRecordComplete = false;
+          window.slideCourseNextClicks = 0;
+          window.slideStaticReady = null;
+          window.slideOriginalLog = console.log;
+          console.log = function(...args) {
+            const text = args[0];
+            if (typeof text === 'string' && text.startsWith('[yxy:event] ')) {
+              const event = JSON.parse(text.slice('[yxy:event] '.length));
+              if (event.type === 'static-ready') window.slideStaticReady = event;
+            }
+            window.slideOriginalLog.apply(console, args);
+          };
+          window.koLearnCourseViewModel.currentPage = () => ({id: () => 'simulator-page',
+            record: () => ({status: () => window.slideRecordComplete})});
+          const next = document.createElement('button');
+          next.id = 'slide-course-next'; next.className = 'next-page-btn'; next.textContent = '下一页';
+          next.style.cssText = 'position:fixed;bottom:10px;right:10px;z-index:25';
+          next.onclick = event => {
+            if (!event.isTrusted) return;
+            window.slideCourseNextClicks++;
+            window.koLearnCourseViewModel.currentPage = () => ({id: () => 'next-page'});
+          };
+          document.body.append(next);
+        })()""")
+        controller._active_config.auto_next = True
+        backend.evaluate('window.__YXY_CONFIG__=' + controller._active_config.to_js() + ';' + INJECT_JS)
+        observe_slide = controller._scroll_document_target if item.get('sessionId') else controller._scroll_document_frame
+        error = observe_slide(item)
+        assert error['error']['code'] == 'page-info-missing', error
+        assert controller.action_executor.navigation_target() is None
+
+        backend.evaluate('window.slideRecordComplete=true')
+        observe_slide(item)
+        status = controller.status_snapshot()
+        assert PagePlan.from_status(status).ready_for_navigation, status
+        backend.evaluate('window.slideRecordComplete=false')
+        assert controller.action_executor.navigation_target() is None
+        backend.evaluate('window.slideRecordComplete=true')
+
+        deadline = time.monotonic() + 8
+        event = backend.evaluate('window.slideStaticReady')
+        while not event and time.monotonic() < deadline:
+            time.sleep(0.1)
+            event = backend.evaluate('window.slideStaticReady')
+        assert event and event['recordComplete'], event
+        controller._handle_course_event(event)
+        controller._handle_course_event(event)
+        state = controller.action_executor.page_state()
+        assert state['page'] == 'next-page' and backend.evaluate('window.slideCourseNextClicks') == 1, state
         print(f"通过 | PPT {'跨域' if cross_origin else '同进程 iframe'} | 1 → 2 → 3，末张不重复翻页")
+        print('通过 | PPT 页码丢失 | 平台确认完成才进入下一课件，可信点击一次')
         return True
     except Exception as error:
         print(f"失败 | PPT {'跨域' if cross_origin else '同进程 iframe'} | {error}")
         return False
     finally:
         backend.evaluate('window.__yxy_controller && window.__yxy_controller.cleanup()')
+        backend.evaluate("if (window.slideOriginalLog) { console.log = window.slideOriginalLog; delete window.slideOriginalLog; }"
+                         "document.querySelector('#slide-course-next')?.remove()")
         controller._running=False
         conn.ws.close()
 
