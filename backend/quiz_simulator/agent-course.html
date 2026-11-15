@@ -8,6 +8,7 @@
   body { margin: 0; font: 16px/1.6 system-ui; background: #f3f6fa; color: #203047; }
   header { padding: 18px; background: #18324b; color: white; }
   main { max-width: 850px; margin: 24px auto; padding: 24px; background: white; }
+  video { display: block; width: min(100%, 560px); aspect-ratio: 16 / 9; background: #203047; }
   .question-wrapper { padding: 20px 0; border-bottom: 1px solid #ccd5df; }
   .question-type-tag { color: #13704a; margin-right: 12px; }
   .choice-item, .choice-btn { display: flex; gap: 16px; padding: 14px; margin: 8px 0; border: 1px solid #aebcca; cursor: pointer; }
@@ -31,6 +32,7 @@
   const run = params.get('run');
   let config, pageIndex = 0, pageId = '', recordComplete = false;
   const stats = {clicks: 0, untrusted: 0, inputs: 0, submits: 0, starts: 0, next: 0, accepted: 0, targets: []};
+  const transitions = [], mediaEvents = [];
   window.labTimeline = [];
   for (const name of ['scroll', 'pointermove', 'pointerdown', 'pointerup', 'focusin']) {
     document.addEventListener(name, e => window.labTimeline.push({event: name, at: performance.now(), scrollY,
@@ -44,7 +46,7 @@
   const element = (tag, cls, text) => {
     const node = document.createElement(tag); node.className = cls; node.textContent = text || ''; return node;
   };
-  window.labSnapshot = () => ({...stats, pageId, pageIndex, recordComplete,
+  window.labSnapshot = () => ({...stats, pageId, pageIndex, recordComplete, transitions, mediaEvents,
     finished: [...document.querySelectorAll('.question-wrapper.finished')].map(q => q.id),
     lockedInputs: document.querySelectorAll('.blank-input:disabled').length,
     answerResults: document.querySelectorAll('.input-wrapper .result').length,
@@ -69,16 +71,60 @@
       return [q.id, value];
     }));
   }
+  function appendNext(view, page) {
+    if (pageIndex + 1 >= config.pages.length) return;
+    const next = element('button', 'next-page-btn', '下一页');
+    next.onclick = e => {
+      if (!e.isTrusted || (page.kind === 'quiz' && !recordComplete)) return;
+      const videos = [...view.querySelectorAll('video')];
+      transitions.push({
+        kind: page.kind,
+        atBottom: scrollY + innerHeight >= document.documentElement.scrollHeight - 2,
+        videosEnded: videos.filter(video => video.ended).length,
+        captionsLoaded: view.querySelector('track')?.readyState === HTMLTrackElement.LOADED,
+      });
+      stats.next++;
+      pageIndex++;
+      render();
+      window.scrollTo(0, 0);
+    };
+    view.append(next);
+  }
+  function renderReading(view, page) {
+    view.append(element('h1', '', page.kind === 'media' ? '本地视频与阅读材料' : '本地阅读材料'));
+    for (const [index, clip] of (page.videos || []).entries()) {
+      view.append(element('h2', '', `片段 ${index + 1}`));
+      const video = element('video', '');
+      video.controls = true;
+      for (const type of ['playing', 'ended', 'error']) {
+        video.addEventListener(type, () => mediaEvents.push({clip: index + 1, type}));
+      }
+      if (clip.captions) {
+        const track = element('track', '');
+        track.kind = 'subtitles';
+        track.src = '/course-lab-video.vtt';
+        track.srclang = 'zh';
+        track.label = '中文';
+        track.default = true;
+        video.append(track);
+      }
+      video.src = clip.src;
+      view.append(video);
+    }
+    for (let i = 0; i < 12; i++) {
+      const paragraph = element('p', '', `合成文档段落 ${i + 1}：检查滚动到底后才进入下一页。`);
+      paragraph.style.paddingBottom = '60px';
+      view.append(paragraph);
+    }
+    appendNext(view, page);
+  }
   async function render() {
     const page = config.pages[pageIndex]; pageId = page.id; recordComplete = false;
     document.querySelector('#page-label').textContent = `${pageIndex + 1}/${config.pages.length}`;
     const view = document.querySelector('main'); view.replaceChildren();
-    if (config.document) {
-      view.className = 'doc-content';
-      for (let i = 0; i < 12; i++) {
-        const paragraph = element('p', '', `合成文档段落 ${i + 1}：检查滚动到底后才完成课程。`);
-        paragraph.style.paddingBottom = '60px'; view.append(paragraph);
-      }
+    view.className = page.kind === 'quiz' ? 'question-view' : 'doc-content';
+    if (page.kind !== 'quiz') {
+      renderReading(view, page);
       return;
     }
     for (const question of page.questions) {
@@ -160,12 +206,8 @@
       } catch (error) { status.textContent = error.message; }
     };
     operation.append(submit, status); view.append(operation);
-    if (pageIndex + 1 < config.pages.length) {
-      const next = element('button', 'next-page-btn', '下一页');
-      next.onclick = e => { if (!e.isTrusted || !recordComplete) return; stats.next++; pageIndex++; render(); };
-      view.append(next);
-    }
-    if (config.timed) {
+    appendNext(view, page);
+    if (page.timed) {
       const mask = element('div', 'limit-time-mask'), info = element('div', 'limit-time-question-info');
       const start = element('button', '', '开始答题'); start.setAttribute('data-bind', 'click: startQuizTimer');
       start.onclick = e => { if (!e.isTrusted) return; stats.starts++; mask.remove(); };
@@ -175,9 +217,11 @@
   window.labRerender = render;
   if (run) fetch('/fixture?run=' + encodeURIComponent(run)).then(r => r.json()).then(async data => {
     config = data;
-    const catalog = config.pages.map(p => ({id: () => p.id, name: () => p.id}));
+    const contentTypes = {document: 5, media: 6, quiz: 7};
+    const catalog = config.pages.map(p => ({id: () => p.id, name: () => p.id, contentType: () => contentTypes[p.kind]}));
     window.koLearnCourseViewModel = {
-      currentPage: () => ({id: () => pageId, name: () => pageId, record: () => ({status: () => recordComplete})}),
+      currentPage: () => ({...catalog[pageIndex], id: () => pageId, name: () => pageId,
+        record: () => ({status: () => recordComplete})}),
       course: () => ({name: () => '本地合成课程', chapters: () => [{sections: () => [{pages: () => catalog}]}]}),
       nextPageName: () => pageIndex + 1 < config.pages.length ? '下一页' : '没有了'
     };
