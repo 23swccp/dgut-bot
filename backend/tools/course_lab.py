@@ -7,7 +7,6 @@ import json
 import os
 import random
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,7 +27,10 @@ sys.path.insert(0, str(ROOT))
 CASES = ("roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid",
          "stale_page", "stale_structure", "unsupported", "expired", "occluded", "prefilled",
          "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "ai_unavailable", "ai_suspend_dialog",
-         "graded_wrong", "server_error", "response_lost", "late_response", "cancelled", "document")
+         "graded_wrong", "server_error", "response_lost", "late_response", "cancelled",
+         "document", "mixed_chapter", "video_load_error")
+
+MEDIA_CASES = {"mixed_chapter", "video_load_error"}
 
 
 def check(condition, detail):
@@ -36,7 +38,7 @@ def check(condition, detail):
         raise AssertionError(detail)
 
 
-def fixture(seed, case):
+def fixture(seed: int, case: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """站点题库/答案不依赖生产选择器或读取器；只把公开题干交给浏览器。"""
     rng = random.Random(seed)
     pages, expected = [], {}
@@ -69,13 +71,26 @@ def fixture(seed, case):
         if case == "unsupported":
             questions[0]["type"] = "essay"
             questions[0]["sourceType"] = "简答题"
-        if case in {"multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route"}:
+        if case in {"multiple_choice", "ai_roundtrip", "ai_timed", "ai_repair", "ai_route", "mixed_chapter"}:
             questions[0]["type"] = "multiple_choice"
             questions[0]["sourceType"] = "多选题"
             questions[0]["prompt"] = f"选出不小于 {a + b} 的数"
             expected[page_id][questions[0]["id"]] = [opt["id"] for opt in opts if int(opt["text"]) >= a + b]
-        pages.append({"id": page_id, "questions": questions})
-    return {"pages": pages, "document": case == "document", "timed": case in {"timed", "ai_timed"}, "long": case == "long_narrow", "slow": case == "slow_render",
+        pages.append({"id": page_id, "kind": "quiz", "questions": questions,
+                      "timed": case in {"timed", "ai_timed", "mixed_chapter"}})
+    if case in MEDIA_CASES:
+        # 章节样本中的正文、连续视频和字幕用本地合成内容重建。
+        pages.insert(0, {"id": f"media-{seed}", "kind": "media", "videos": [
+            {"src": "/course-lab-video.webm?clip=1", "captions": True},
+            {"src": "/missing-course-lab-video.webm" if case == "video_load_error" else "/course-lab-video.webm?clip=2"},
+        ]})
+    if case in {"document", "mixed_chapter"}:
+        document = {"id": f"document-{seed}", "kind": "document"}
+        if case == "document":
+            pages, expected = [document], {}
+        else:
+            pages.insert(0, document)
+    return {"pages": pages, "long": case == "long_narrow", "slow": case == "slow_render",
             "prefilled": case == "prefilled", "textInputs": case == "text_inputs",
             "editorKind": "editable" if case == "editable_answer" else "textarea"}, expected
 
@@ -142,7 +157,10 @@ class Lab:
             def do_GET(self):
                 uri = urlsplit(self.path)
                 if uri.path != "/fixture":
-                    return super().do_GET()
+                    try:
+                        return super().do_GET()
+                    except ConnectionAbortedError:
+                        return  # Chromium 可能在读取媒体响应正文前关闭初次请求。
                 record = lab.runs.get(parse_qs(uri.query).get("run", [""])[0])
                 if record is None:
                     return self.reply(404, {"error": "Unknown fixture run"})
@@ -237,7 +255,7 @@ class Lab:
 
     def cli(self, tool, payload=None, error=None):
         env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "backend" / "src"), str(ROOT / "backend"), str(ROOT))), "PYTHONIOENCODING": "utf-8"}
-        process = subprocess.run([shutil.which("python") or sys.executable, "-m", "dgutbot.agent.cli", "call", tool],
+        process = subprocess.run([sys.executable, "-m", "dgutbot.agent.cli", "call", tool],
                                  input=json.dumps(payload or {}, ensure_ascii=False).encode("utf-8"),
                                  capture_output=True, timeout=40, env=env, cwd=ROOT)
         value = json.loads(process.stdout.decode("utf-8"))
@@ -264,7 +282,7 @@ class Lab:
                  "height": 720 if case == "long_narrow" else 900, "deviceScaleFactor": 1, "mobile": False})
         self.cdp("Page.navigate", {"url": self.site_url + "/agent-course.html?run=" + run_id})
         wait_until(lambda: self.evaluate("window.labReady === true && new URLSearchParams(location.search).get('run') === " + json.dumps(run_id)), bool)
-        if case != "document":
+        if public["pages"][0]["kind"] == "quiz":
             from dgutbot.course.yxy_quiz import QUIZ_STATE_JS
             initial_quiz = json.loads(self.evaluate(QUIZ_STATE_JS))
             check(initial_quiz.get("pageId") == public["pages"][0]["id"], "未启动控制器时不能读取平台页标识")
@@ -279,8 +297,13 @@ class Lab:
             check(self.evaluate("scrollY + innerHeight >= document.documentElement.scrollHeight - 2"), "文档尚未滚动到末尾")
             check(not record["submissions"], "文档场景不应提交测验")
             return {"case": case, "seed": seed, "passed": True, "browser": self.evaluate("window.labSnapshot()"), "submissions": []}
-        for index, page in enumerate(public["pages"]):
-            task = wait_until(lambda: self.task(task_id), lambda t: t["state"] in {"waiting_for_input", "failed", "completed", "cancelled"})
+        if case == "video_load_error":
+            return self.run_video_load_error(seed, task_id, record)
+        quiz_pages = [page for page in public["pages"] if page["kind"] == "quiz"]
+        for index, page in enumerate(quiz_pages):
+            task = wait_until(lambda: self.task(task_id),
+                              lambda t: t["state"] in {"waiting_for_input", "failed", "completed", "cancelled"},
+                              timeout=45 if case == "mixed_chapter" else 25)
             check(task["state"] == "waiting_for_input", task)
             request = self.cli("quiz.get_request", {"requestId": task["waiting"]["requestId"]})
             check(request["pageId"] == page["id"], request)
@@ -346,19 +369,51 @@ class Lab:
                 break
             check(result["state"] == "completed" and result["result"] == {"completedCount": 3, "submitAttempts": 1}, result)
             check(len(record["submissions"]) == index + 1 and all(s["accepted"] for s in record["submissions"]), record["submissions"])
-        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "text_inputs", "short_answer", "editable_answer", "ai_short_answer", "multiple_choice", "graded_wrong"}:
+        if case in {"roundtrip", "timed", "long_narrow", "delayed", "slow_render", "rerender", "invalid", "multi_blank", "text_inputs", "short_answer", "editable_answer", "multiple_choice", "graded_wrong", "mixed_chapter"}:
             final_task = wait_until(lambda: self.task(task_id), lambda t: t["state"] in {"completed", "failed", "cancelled"})
             check(final_task["state"] == "completed", final_task)
         browser_result = self.evaluate("window.labSnapshot()")
         check(browser_result["untrusted"] == 0, browser_result)
-        check(browser_result["starts"] == int(case == "timed"), browser_result)
-        check(browser_result["next"] == (1 if case == "roundtrip" else 0), browser_result)
+        check(browser_result["starts"] == int(case in {"timed", "mixed_chapter"}), browser_result)
+        check(browser_result["next"] == {"roundtrip": 1, "mixed_chapter": 2}.get(case, 0), browser_result)
+        if case == "mixed_chapter":
+            check(browser_result["transitions"] == [
+                {"kind": "document", "atBottom": True, "videosEnded": 0, "captionsLoaded": False},
+                {"kind": "media", "atBottom": True, "videosEnded": 2, "captionsLoaded": True},
+            ], browser_result)
+            media_events = browser_result["mediaEvents"]
+            check([event["clip"] for event in media_events if event["type"] == "playing"] == [1, 2], media_events)
+            check([event["clip"] for event in media_events if event["type"] == "ended"] == [1, 2], media_events)
+            check(not any(event["type"] == "error" for event in media_events), media_events)
         if case == "multi_blank":
             check(browser_result["lockedInputs"] == 3 and browser_result["answerResults"] == 3, browser_result)
         if case == "graded_wrong":
             check(browser_result["lockedInputs"] == 2 and browser_result["wrongResults"] == 2, browser_result)
             check(record["submissions"] and record["submissions"][0]["accepted"] and not record["submissions"][0]["correct"], record["submissions"])
         return {"case": case, "seed": seed, "passed": True, "browser": browser_result, "submissions": record["submissions"]}
+
+    def run_video_load_error(self, seed: int, task_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        def observe() -> dict[str, Any]:
+            snapshot = self.evaluate("window.labSnapshot()")
+            check(snapshot["pageIndex"] == 0 and snapshot["clicks"] == 0 and not snapshot["transitions"], snapshot)
+            return snapshot
+
+        first_ended = {"clip": 1, "type": "ended"}
+        second_error = {"clip": 2, "type": "error"}
+        wait_until(observe, lambda s: first_ended in s["mediaEvents"] and second_error in s["mediaEvents"])
+        # 跨过一次控制器的周期检查，验证前一段结束后仍等待出错的第二段。
+        hold_until = time.monotonic() + 3
+        wait_until(observe, lambda s: time.monotonic() >= hold_until, timeout=5)
+        status = self.cli("course.get_status")
+        check(status["page"]["id"] == record["fixture"]["pages"][0]["id"] and not status["page"]["completed"], status)
+        check({"kind": "video", "state": "pending", "count": 2} in status["pagePlan"], status)
+        task = self.task(task_id)
+        check(task["state"] == "running", task)
+        self.cli("task.cancel", {"taskId": task_id, "idempotencyKey": uuid4().hex})
+        wait_until(lambda: self.task(task_id), lambda t: t["state"] == "cancelled")
+        browser_result = observe()
+        check(not record["submissions"] and browser_result["starts"] == 0, browser_result)
+        return {"case": "video_load_error", "seed": seed, "passed": True, "browser": browser_result, "submissions": []}
 
     def run_ai(self, case: str, seed: int, public: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
         """合成 AI 仅替换上游返回；取题、提示词、校验和浏览器输入使用生产代码。"""
@@ -476,6 +531,7 @@ def main():
                             (output / f"{case}-{seed}.png").write_bytes(base64.b64decode(capture["data"]))
                             row["browser"] = lab.evaluate("window.labSnapshot && window.labSnapshot()")
                             row["timeline"] = lab.evaluate("window.labTimeline")
+                            row["controller"] = lab.commands.backend.course_controller.status_snapshot()
                         except Exception as diagnostic_error:
                             row["diagnosticError"] = str(diagnostic_error)
                     finally:
@@ -489,7 +545,7 @@ def main():
                     report["cases"].append(row)
                     # 全为本地合成数据；不保存 runtime 凭据、浏览器 profile 或任何真实课程。
                     (output / f"{case}-{seed}.json").write_text(json.dumps({"result": row, "cli": lab.trace,
-                        "events": lab.commands.EVENT_BUFFER.wait_events(lab.event_start, 0, 100, ["course", "quiz", "session", "navigation", "recovery"])},
+                        "events": lab.commands.EVENT_BUFFER.wait_events(lab.event_start, 0, 100, ["course", "content", "video", "quiz", "session", "navigation", "recovery"])},
                         ensure_ascii=False, indent=2), encoding="utf-8")
                     print(f"{'通过' if row['passed'] else '失败'} | {case} | seed={seed} | {row['seconds']}s {row.get('error', '')}", flush=True)
         finally:

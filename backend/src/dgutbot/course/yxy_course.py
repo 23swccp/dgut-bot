@@ -560,7 +560,10 @@ INJECT_JS = r"""
   function scrollSameOriginDocument() {
     if (!running || !C.document_scroll_enabled) return;
     const pageVideos = videosOnPage();
-    if (pageVideos.some(function(video) { return !videoLogicallyFinished(video, pageVideos); })) return;
+    // 播放器可在 ended 事件前达到完成阈值；先等 video-ended 入队，
+    // 避免 Python 还在视频阶段时丢掉只发送一次的 document-reading。
+    if (pageVideos.length && (!allVideosFinished(pageVideos) ||
+        !completedContent.has('video:' + videoPageKey()))) return;
     if (quizBusy()) return;
     if (document.querySelector('iframe[src*="ulearning.cn"]')) return;
     const target = findDocumentTarget();
