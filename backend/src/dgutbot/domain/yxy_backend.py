@@ -794,6 +794,9 @@ class SignBackend:
                     params={"currentPlatformType": 1, "lang": "zh", "ocId": course.id, "textbookId": textbook_id},
                 )
                 info = info_response.get("result", info_response) if isinstance(info_response, dict) else {}
+                textbook_summary = info.get("textbook", {}) if isinstance(info, dict) else {}
+                if not isinstance(textbook_summary, dict):
+                    textbook_summary = {}
                 entries = info.get("list", []) if isinstance(info, dict) else []
                 for entry in entries if isinstance(entries, list) else []:
                     if not isinstance(entry, dict):
@@ -815,6 +818,9 @@ class SignBackend:
                         **entry, "courseId": textbook_id, "classId": class_id,
                         "chapterId": chapter_id, "url": learn_url,
                         "name": entry.get("currentUnit") or entry.get("currentActivity") or "未命名课件",
+                        "timeConsuming": entry.get("timeConsuming") or 0,
+                        "score": entry.get("score") or 0,
+                        "textbookSummary": textbook_summary,
                         "contentType": "课件",
                     })
             return {"pages": normalized}
@@ -1768,7 +1774,17 @@ class SignBackend:
         finally:
             ws.close()
 
-    def load_session_and_courses(self, wait_seconds: int = 20, automatic: bool = False) -> bool:
+    def load_session_and_courses(
+        self, wait_seconds: int = 20, automatic: bool = False,
+        *, on_error: Callable[[str], None] | None = None,
+    ) -> bool:
+        def fail(message: str) -> bool:
+            if not automatic:
+                self._log(message, "warn")
+            if on_error:
+                on_error(self._redact(message))
+            return False
+
         if not automatic:
             self._log("正在连接浏览器远程调试端口…", "info")
         ws_url = None
@@ -1780,15 +1796,11 @@ class SignBackend:
             if attempt + 1 < attempts:
                 time.sleep(1)
         if not ws_url:
-            if not automatic:
-                self._log("连接浏览器失败：未发现远程调试端口。", "warn")
-            return False
+            return fail("连接浏览器失败：未发现远程调试端口。")
         try:
             cookies = self._cookies(ws_url)
         except Exception as error:
-            if not automatic:
-                self._log(f"读取浏览器登录信息失败：{error}", "warn")
-            return False
+            return fail(f"读取浏览器登录信息失败：{error}")
         dgut = [item for item in cookies if "dgut.edu.cn" in item.get("domain", "")]
         candidate_token = self._browser_cookie(dgut, "AUTHORIZATION")
         cached = self._load_login_cache()
@@ -1798,15 +1810,11 @@ class SignBackend:
             try:
                 self._restore_browser_login(ws_url, candidate_token, cached.get("user_id"))
             except Exception as error:
-                if not automatic:
-                    self._log(f"恢复浏览器登录缓存失败：{error}", "warn")
-                return False
+                return fail(f"恢复浏览器登录缓存失败：{error}")
         if not candidate_token:
-            if not automatic:
-                self._log("未检测到有效登录状态，请在浏览器中完成优学院登录。", "warn")
-            return False
+            return fail("未检测到有效登录状态，请在浏览器中完成优学院登录。")
         if automatic and candidate_token == self._rejected_browser_token:
-            return False
+            return fail("优学院登录已失效，请在浏览器中重新登录。")
 
         previous_token, previous_user_id = self.token, self.user_id
         previous_display_name, previous_account_name = self.display_name, self.account_name
@@ -1843,9 +1851,7 @@ class SignBackend:
                     self.headers["Authorization"] = previous_authorization
                 else:
                     self.headers.pop("Authorization", None)
-            if not automatic:
-                self._log(f"获取课程列表失败：{error}", "warn")
-            return False
+            return fail(f"获取课程列表失败：{error}")
         if not courses:
             self.token, self.user_id = previous_token, previous_user_id
             self.display_name, self.account_name = previous_display_name, previous_account_name
@@ -1853,9 +1859,7 @@ class SignBackend:
                 self.headers["Authorization"] = previous_authorization
             else:
                 self.headers.pop("Authorization", None)
-            if not automatic:
-                self._log("没有读取到课程，请确认登录账号与网络状态。", "warn")
-            return False
+            return fail("没有读取到课程，请确认登录账号与网络状态。")
         self.token = candidate_token
         self.user_id, self.display_name, self.account_name = self._browser_identity(dgut)
         if cached and cached["token"] == candidate_token:

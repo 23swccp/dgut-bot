@@ -480,11 +480,16 @@ def _dispatch(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             wait_seconds = 1
         automatic = bool(payload.get("automatic", False))
-        return {
-            "ok": backend.load_session_and_courses(wait_seconds=wait_seconds, automatic=automatic),
+        failures: list[str] = []
+        ok = backend.load_session_and_courses(wait_seconds=wait_seconds, automatic=automatic, on_error=failures.append)
+        result = {
+            "ok": ok,
             "courses": courses(),
             "login": backend.login_status(),
         }
+        if not ok and failures:
+            result["error"] = failures[0]
+        return result
     if command == "select_course":
         course = backend.select_course(str(payload.get("query", "")))
         value = {"id": course.id, "name": course.name, "teacherName": course.teacher_name} if course else None

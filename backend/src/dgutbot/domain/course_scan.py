@@ -1,4 +1,4 @@
-"""未完成课件扫描的纯解析器与有界后台服务。
+"""课件目录扫描的纯解析器与有界后台服务。
 
 平台字段仍可能随租户版本变化；所有兼容字段集中在本模块，调用方不猜测
 目录接口。扫描器只接收已经由 Chromium 同源请求桥取得的课程与目录数据。
@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from queue import Empty, Queue
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
@@ -56,6 +57,11 @@ class LessonItem:
     url: str
     canAutoOpen: bool
     unavailableReason: str
+    studySeconds: float | None = None
+    score: float | None = None
+    startDate: str | None = None
+    endDate: str | None = None
+    textbookSummary: dict[str, Any] | None = None
 
     def mapping(self) -> dict[str, Any]:
         return asdict(self)
@@ -81,6 +87,28 @@ def _bool(value: Any) -> bool | None:
         if lowered in {"false", "0", "no", "unfinished", "incomplete"}:
             return False
     return None
+
+
+def _nonnegative_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _plan_date(value: Any) -> str | None:
+    timestamp = _nonnegative_number(value)
+    if not timestamp:
+        return None
+    if timestamp >= 100_000_000_000:
+        timestamp /= 1000
+    try:
+        return datetime.fromtimestamp(timestamp, timezone(timedelta(hours=8))).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def completion_state(data: dict[str, Any]) -> tuple[str, float | None]:
@@ -168,22 +196,45 @@ def flatten_lessons(course: Any, payload: Any) -> list[LessonItem]:
         unavailable = _hidden_or_closed(value)
         if unavailable:
             return
-        if looks_like_lesson and title and not unavailable:
+        if looks_like_lesson and title:
             state, percent = completion_state(value)
-            if state != "completed":
-                strong_identity = "|".join((class_id, node_id, chapter_id, page_id, url)).strip("|")
-                identity = "|".join((item_course_id, strong_identity or f"{title}|{'/'.join(path)}"))
-                stable_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
-                if stable_id not in seen:
-                    seen.add(stable_id)
-                    results.append(LessonItem(
-                        id=stable_id, courseId=item_course_id, ocId=course_id, classId=class_id,
-                        courseName=course_name, teacherName=teacher, chapterPath=path,
-                        title=title, type=kind, completionStatus=state,
-                        completionPercent=percent, nodeId=node_id, pageId=page_id,
-                        chapterId=chapter_id, url=url, canAutoOpen=bool(url),
-                        unavailableReason="" if url else "平台响应未提供已验证的真实课件地址",
-                    ))
+            strong_identity = "|".join((class_id, node_id, chapter_id, page_id, url)).strip("|")
+            identity = "|".join((item_course_id, strong_identity or f"{title}|{'/'.join(path)}"))
+            stable_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+            if stable_id not in seen:
+                seen.add(stable_id)
+                plan = value.get("planState")
+                if not isinstance(plan, dict):
+                    plan = {}
+                summary = value.get("textbookSummary")
+                if not isinstance(summary, dict):
+                    summary = {}
+                cover = str(summary.get("cover") or "")
+                try:
+                    parts = urlsplit(cover)
+                    allowed_cover = parts.scheme == "https" and (parts.hostname or "").endswith((".dgut.edu.cn", ".ulearning.cn"))
+                except ValueError:
+                    allowed_cover = False
+                if not allowed_cover:
+                    cover = ""
+                progress = _nonnegative_number(summary.get("progress"))
+                results.append(LessonItem(
+                    id=stable_id, courseId=item_course_id, ocId=course_id, classId=class_id,
+                    courseName=course_name, teacherName=teacher, chapterPath=path,
+                    title=title, type=kind, completionStatus=state,
+                    completionPercent=percent, nodeId=node_id, pageId=page_id,
+                    chapterId=chapter_id, url=url, canAutoOpen=bool(url),
+                    unavailableReason="" if url else "平台响应未提供已验证的真实课件地址",
+                    studySeconds=_nonnegative_number(value.get("timeConsuming")),
+                    score=_nonnegative_number(value.get("score")),
+                    startDate=_plan_date(plan.get("startDate")), endDate=_plan_date(plan.get("endDate")),
+                    textbookSummary={
+                        "cover": cover,
+                        "progress": min(progress * 100, 100) if progress is not None else None,
+                        "studySeconds": _nonnegative_number(summary.get("timeConsuming")),
+                        "score": _nonnegative_number(summary.get("score")),
+                    } if summary else None,
+                ))
         next_path = path + [title] if title and (children or not looks_like_lesson) else path
         for child in children:
             walk(child, next_path, class_id)
@@ -379,9 +430,12 @@ class CourseScanService:
 
     def _publish(self) -> None:
         """持锁发布每门课的结果，按原课程顺序排列。"""
-        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        groups = []
+        unfinished = 0
         for key in self._course_order:
-            for item in self._results.get(key, []):
-                groups.setdefault((item.courseId, item.courseName), []).append(item.mapping())
-        mapped = [{"courseId": key[0], "courseName": key[1], "items": value} for key, value in groups.items()]
-        self._snapshot.update(groups=mapped, unfinishedCount=sum(len(group["items"]) for group in mapped))
+            items = self._results.get(key)
+            if items:
+                groups.append({"courseId": key, "courseName": items[0].courseName,
+                               "items": [item.mapping() for item in items]})
+                unfinished += sum(item.completionStatus != "completed" for item in items)
+        self._snapshot.update(groups=groups, unfinishedCount=unfinished)

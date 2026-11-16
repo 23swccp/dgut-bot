@@ -1,8 +1,12 @@
+import { formatDuration } from "./courseObservability";
+
 export type LessonItem = {
   id: string; courseId: string; ocId?: string; classId: string; chapterId?: string; courseName: string; teacherName: string;
   chapterPath: string[]; title: string; type: string; completionStatus: string;
   completionPercent: number | null; nodeId: string; pageId: string; url: string;
   canAutoOpen: boolean; unavailableReason: string;
+  studySeconds?: number | null; score?: number | null; startDate?: string | null; endDate?: string | null;
+  textbookSummary?: { cover: string; progress: number | null; studySeconds: number | null; score: number | null } | null;
 };
 
 export type LessonGroup = { courseId: string; courseName: string; items: LessonItem[] };
@@ -13,17 +17,19 @@ export type CourseScanStatus = {
   cachedAt: string; fromCache: boolean; stopping?: boolean; error: string; openPhase: string; openError: string; selectedId: string;
 };
 
-export function filterLessonGroups(groups: LessonGroup[], query: string): LessonGroup[] {
-  const keyword = query.trim().toLocaleLowerCase();
-  if (!keyword) return groups;
-  return groups.map(group => ({ ...group, items: group.items.filter(item =>
-    `${item.courseName} ${item.chapterPath.join(" ")} ${item.title}`.toLocaleLowerCase().includes(keyword),
-  ) })).filter(group => group.items.length > 0);
+export function lessonProgress(item: LessonItem): number {
+  return Math.round(item.completionPercent ?? (item.completionStatus === "completed" ? 100 : 0));
 }
 
-export function lessonProgress(item: LessonItem): string {
-  if (typeof item.completionPercent === "number") return `${Math.round(item.completionPercent)}%`;
-  return item.completionStatus === "in_progress" ? "进行中" : "未开始";
+export function lessonStudyTime(seconds?: number | null): string {
+  if (seconds == null) return "--";
+  const duration = formatDuration(seconds);
+  return duration.length === 5 ? `00:${duration}` : duration;
+}
+
+export function lessonStudyAction(item: LessonItem): string {
+  return item.completionStatus !== "not_started" || (item.studySeconds ?? 0) > 0 || lessonProgress(item) > 0
+    ? "继续学习" : "开始学习";
 }
 
 export function openPhaseLabel(phase: string): string {
