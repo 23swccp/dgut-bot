@@ -2,6 +2,7 @@ import threading
 import time
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -52,12 +53,33 @@ def test_completion_recognizes_completed_partial_and_unstarted():
     assert completion_state({}) == ("not_started", None)
 
 
-def test_filters_completed_hidden_and_unopened_but_keeps_partial():
+def test_keeps_completed_and_partial_but_filters_hidden_and_unopened():
     payload = {"pages": [lesson(pageId="done", completed=True), lesson(pageId="hidden", hidden=True),
                          lesson(pageId="closed", isOpen=False), lesson(pageId="partial", progress="25%") ]}
     result = flatten_lessons(Course(1, "课"), payload)
-    assert [item.pageId for item in result] == ["partial"]
-    assert result[0].completionPercent == 25
+    assert [item.pageId for item in result] == ["done", "partial"]
+    assert result[0].completionPercent == 100
+    assert result[1].completionPercent == 25
+
+
+def test_keeps_chapter_metadata_and_groups_textbooks_under_one_course():
+    start = datetime(2026, 9, 2, tzinfo=timezone(timedelta(hours=8)))
+    end = datetime(2026, 12, 31, tzinfo=timezone(timedelta(hours=8)))
+    payload = {"pages": [
+        lesson(courseId=90, completed=True, timeConsuming=2904, score="75",
+               planState={"startDate": int(start.timestamp()) * 1000, "endDate": int(end.timestamp())}),
+        lesson(courseId=91, pageId="p2", timeConsuming=0, score=0, planState={"startDate": 0}),
+    ]}
+    service = CourseScanService(lambda: [Course(42, "课")], lambda _: payload, lambda: True, str)
+    service.start()
+    scan = wait_done(service)
+    assert scan["unfinishedCount"] == 1
+    assert len(scan["groups"]) == 1 and scan["groups"][0]["courseId"] == "42"
+    done, pending = scan["groups"][0]["items"]
+    assert (done["studySeconds"], done["score"], done["startDate"], done["endDate"]) == (
+        2904, 75, "2026-09-02", "2026-12-31",
+    )
+    assert (pending["studySeconds"], pending["score"], pending["startDate"], pending["endDate"]) == (0, 0, None, None)
 
 
 def test_missing_fields_degrades_to_non_openable_and_duplicates_are_stable():
@@ -363,11 +385,12 @@ def test_verified_lms_directory_endpoints_build_the_observed_ua_url():
         backend.api.request = Mock(side_effect=responses)
         payload = backend._course_directory_payload(Course(42, "课程", "教师"))
         result = flatten_lessons(Course(42, "课程", "教师"), payload)
-        assert len(result) == 1
-        assert result[0].courseId == "900" and result[0].ocId == "42"
-        assert result[0].classId == "300" and result[0].chapterId == "11"
-        assert result[0].completionPercent == 25
-        assert "courseId=900" in result[0].url and "chapterId=11" in result[0].url and "classId=300" in result[0].url
+        assert [item.title for item in result] == ["完成", "待学习"]
+        pending = result[1]
+        assert pending.courseId == "900" and pending.ocId == "42"
+        assert pending.classId == "300" and pending.chapterId == "11"
+        assert pending.completionPercent == 25
+        assert "courseId=900" in pending.url and "chapterId=11" in pending.url and "classId=300" in pending.url
         calls = backend.api.request.call_args_list
         assert calls[0].args[1].endswith("/textbook/student/42/list")
         assert calls[1].args[1].endswith("/classes/information/student/42")

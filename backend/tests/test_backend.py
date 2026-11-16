@@ -596,6 +596,30 @@ class BackendTests(unittest.TestCase):
             self.assertEqual([course.id for course in backend.courses], [101])
             self.assertEqual(auth_path.read_bytes(), original)
 
+    def test_automatic_login_command_reports_network_failure_and_allows_retry(self):
+        from dgutbot.app import commands
+
+        with tempfile.TemporaryDirectory() as directory:
+            backend = self.make_backend(Path(directory))
+            cookies = [{"domain": ".dgut.edu.cn", "name": "AUTHORIZATION", "value": "test-token"}]
+            with (
+                patch.object(commands, "backend", backend),
+                patch.object(backend, "_get_ws_url", return_value="ws://test"),
+                patch.object(backend, "_cookies", return_value=cookies),
+                patch.object(backend, "_fetch_courses", side_effect=[
+                    RuntimeError("浏览器请求失败：TypeError"), [Course(101, "课程")],
+                ]),
+            ):
+                failure = commands.handle("load_session_and_courses", {"automatic": True})
+                self.assertFalse(failure["ok"])
+                self.assertEqual(failure["error"], "获取课程列表失败：浏览器请求失败：TypeError")
+                self.assertFalse(failure["login"]["authenticated"])
+                recovered = commands.handle("load_session_and_courses", {"automatic": True})
+                self.assertTrue(recovered["ok"])
+                self.assertNotIn("error", recovered)
+                self.assertTrue(recovered["login"]["authenticated"])
+                self.assertNotIn("test-token", json.dumps(recovered))
+
     def test_refresh_courses_command_uses_current_session_and_cache_command_is_removed(self):
         from dgutbot.app import commands
 

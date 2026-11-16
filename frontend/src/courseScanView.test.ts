@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterLessonGroups, lessonProgress, openPhaseLabel, type LessonGroup } from "./courseScanView";
+import { lessonProgress, lessonStudyAction, lessonStudyTime, openPhaseLabel, type LessonGroup } from "./courseScanView";
 
 const groups: LessonGroup[] = [{ courseId: "1", courseName: "系统工程", items: [{
   id: "x", courseId: "1", classId: "", courseName: "系统工程", teacherName: "教师",
@@ -9,17 +9,20 @@ const groups: LessonGroup[] = [{ courseId: "1", courseName: "系统工程", item
 }]}];
 
 describe("course scan view", () => {
-  it("searches course, chapter and lesson names", () => {
-    expect(filterLessonGroups(groups, "系统")).toHaveLength(1);
-    expect(filterLessonGroups(groups, "概论")[0].items).toHaveLength(1);
-    expect(filterLessonGroups(groups, "简介")[0].items).toHaveLength(1);
-    expect(filterLessonGroups(groups, "不存在")).toEqual([]);
-  });
   it("formats progress and every auto-open stage", () => {
-    expect(lessonProgress(groups[0].items[0])).toBe("35%");
+    expect(lessonProgress(groups[0].items[0])).toBe(35);
     expect(openPhaseLabel("waiting_page")).toBe("等待页面加载");
     expect(openPhaseLabel("started")).toBe("刷课已启动");
     expect(openPhaseLabel("failed")).toBe("打开失败");
     expect(openPhaseLabel("timeout")).toBe("页面加载超时");
+  });
+
+  it("formats chapter time and continues chapters with study time even at 0 percent", () => {
+    const item = { ...groups[0].items[0], completionStatus: "not_started", completionPercent: 0 };
+    expect(lessonStudyTime(2904)).toBe("00:48:24");
+    expect(lessonStudyTime(0)).toBe("00:00:00");
+    expect(lessonStudyTime(undefined)).toBe("--");
+    expect(lessonStudyAction({ ...item, studySeconds: 611 })).toBe("继续学习");
+    expect(lessonStudyAction({ ...item, studySeconds: 0 })).toBe("开始学习");
   });
 });
