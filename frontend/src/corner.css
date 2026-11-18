@@ -203,7 +203,8 @@
   border: 1px solid #e2e5eb;
   border-right: 0;
   border-radius: 10px 0 0 10px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .module-brand {
@@ -311,6 +312,20 @@
   display: flex;
   align-items: center;
   gap: 11px;
+}
+
+.module-nav a.module-link {
+  height: 44px;
+  border-radius: 9px;
+  padding: 0 12px;
+  color: #566176;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.module-nav a.module-link:hover {
+  background: #f0f6f3;
 }
 
 .module-nav .module-icon {
@@ -660,7 +675,8 @@
     font-size: 14px;
   }
 
-  .settings-nav button {
+  .settings-nav button,
+  .module-nav a.module-link {
     height: 49px;
     font-size: 16px;
   }

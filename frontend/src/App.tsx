@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, ScrollText, Settings, type LucideIcon } from "lucide-react";
+import { BookOpenCheck, CircleQuestionMark, ClipboardCheck, PenLine, ScrollText, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
 import { type CourseEvent, type CourseStatus } from "./courseObservability";
 import { type UpdateStatus } from "./updateClient";
 import { UpdateSettings } from "./UpdateSettings";
@@ -455,7 +455,16 @@ function App() {
           animate={{ width: 260, x: 0, opacity: 1 }}
           exit={reduceMotion ? { width: 0 } : { width: 0, x: -18, opacity: 0 }}
           transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        ><div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div>{navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}<div className="module-divider"/><button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button></motion.aside>}
+        >
+          <div className="module-brand"><strong>优学院助手</strong><small className={loginStatus?.authenticated ? "online" : ""}><i />{loginStatus?.authenticated ? (loginStatus.greeting || "已登录") : phase === "login" ? "等待登录…" : "未登录"}</small></div>
+          {navItems.map(item => { const ModuleIcon = moduleIcons[item]; return <button key={item} onClick={() => setPage(item)} className={`module-link ${page === item ? "active" : ""}`}><ModuleIcon className="module-icon" size={19} strokeWidth={2}/><span>{labels[item]}</span></button>; })}
+          <a className="module-link" href="https://webvpn.dgut.edu.cn/" target="_blank" rel="noopener noreferrer">
+            <ShieldCheck className="module-icon" size={19} strokeWidth={2} aria-hidden="true" />
+            <span>零信任 VPN</span>
+          </a>
+          <div className="module-divider"/>
+          <button type="button" className="ai-workspace-launch" onClick={openAiWorkspace}><b>✦</b><span>AI 工作台</span><i>↗</i></button>
+        </motion.aside>}
       </AnimatePresence>
       <div className="workspace-content">
       {page === "terminal" && <SignUnavailablePage />}
